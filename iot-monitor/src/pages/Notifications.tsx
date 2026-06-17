@@ -15,12 +15,14 @@ import {
   X,
   ChevronDown,
   ChevronUp,
+  ExternalLink,
+  Shield,
 } from 'lucide-react'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import { useStore } from '../store'
 import { formatDateTime, cn } from '../utils'
-import type { AlertNotification, AlertLevel } from '../types'
+import type { AlertNotification, AlertLevel, HitConditionDetail } from '../types'
 
 export default function Notifications() {
   const {
@@ -44,15 +46,22 @@ export default function Notifications() {
   const [resolveNote, setResolveNote] = useState('')
   const [resolveNoteError, setResolveNoteError] = useState('')
   const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set())
+  const [expandedConditions, setExpandedConditions] = useState<Set<string>>(new Set())
 
   const toggleNoteExpanded = (id: string) => {
     setExpandedNotes((prev) => {
       const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleConditions = (id: string) => {
+    setExpandedConditions((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
   }
@@ -82,23 +91,17 @@ export default function Notifications() {
 
   const getLevelIcon = (level: AlertNotification['level']) => {
     switch (level) {
-      case 'critical':
-        return AlertCircle
-      case 'warning':
-        return AlertTriangle
-      default:
-        return Info
+      case 'critical': return AlertCircle
+      case 'warning': return AlertTriangle
+      default: return Info
     }
   }
 
   const getLevelLabel = (level: AlertNotification['level']) => {
     switch (level) {
-      case 'critical':
-        return '严重'
-      case 'warning':
-        return '警告'
-      default:
-        return '提示'
+      case 'critical': return '严重'
+      case 'warning': return '警告'
+      default: return '提示'
     }
   }
 
@@ -106,36 +109,27 @@ export default function Notifications() {
     const baseOpacity = resolved ? 'opacity-80' : read ? '' : ''
     switch (level) {
       case 'critical':
-        return cn(
-          'border-2 border-red-500/50 bg-red-500/10',
-          !read && !resolved && 'ring-2 ring-red-500/30',
-          baseOpacity,
-        )
+        return cn('border-2 border-red-500/50 bg-red-500/10', !read && !resolved && 'ring-2 ring-red-500/30', baseOpacity)
       case 'warning':
-        return cn(
-          'border-2 border-amber-500/50 bg-amber-500/10',
-          !read && !resolved && 'ring-2 ring-amber-500/30',
-          baseOpacity,
-        )
+        return cn('border-2 border-amber-500/50 bg-amber-500/10', !read && !resolved && 'ring-2 ring-amber-500/30', baseOpacity)
       default:
-        return cn(
-          'border border-dark-600 bg-dark-700/50',
-          !read && !resolved && 'ring-2 ring-blue-500/30',
-          baseOpacity,
-        )
+        return cn('border border-dark-600 bg-dark-700/50', !read && !resolved && 'ring-2 ring-blue-500/30', baseOpacity)
     }
   }
 
   const getLevelBadgeStyles = (level: AlertNotification['level']) => {
     switch (level) {
-      case 'critical':
-        return 'bg-red-500/20 text-red-400 border-red-500/40'
-      case 'warning':
-        return 'bg-amber-500/20 text-amber-400 border-amber-500/40'
-      default:
-        return 'bg-blue-500/20 text-blue-400 border-blue-500/40'
+      case 'critical': return 'bg-red-500/20 text-red-400 border-red-500/40'
+      case 'warning': return 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+      default: return 'bg-blue-500/20 text-blue-400 border-blue-500/40'
     }
   }
+
+  const getMetricLabel = (m: string) =>
+    m === 'temperature' ? '温度' : m === 'battery' ? '电量' : '信号'
+
+  const getOpLabel = (op: string) =>
+    op === '>' ? '超过' : op === '<' ? '低于' : op === '>=' ? '不低于' : op === '<=' ? '不高于' : op === '==' ? '等于' : '不等于'
 
   const openResolveModal = (notification: AlertNotification) => {
     setCurrentNotification(notification)
@@ -249,9 +243,7 @@ export default function Notifications() {
             >
               <option value="all">全部规则</option>
               {rules.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                </option>
+                <option key={r.id} value={r.id}>{r.name}</option>
               ))}
             </select>
           </div>
@@ -263,9 +255,7 @@ export default function Notifications() {
             >
               <option value="all">全部设备</option>
               {devices.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
+                <option key={d.id} value={d.id}>{d.name}</option>
               ))}
             </select>
           </div>
@@ -287,23 +277,23 @@ export default function Notifications() {
           {filtered.map((n) => {
             const LevelIcon = getLevelIcon(n.level)
             const isNoteExpanded = expandedNotes.has(n.id)
+            const isCondExpanded = expandedConditions.has(n.id)
+            const hitConditions = n.hitConditions || []
+            const hitCount = hitConditions.filter((h) => h.hit).length
+            const logicLabel = n.conditionLogic === 'all' ? '且（AND）' : n.conditionLogic === 'any' ? '或（OR）' : ''
+
             return (
               <div
                 key={n.id}
-                className={cn(
-                  'rounded-xl p-4 transition-all',
-                  getLevelStyles(n.level, n.read, n.resolved),
-                )}
+                className={cn('rounded-xl p-4 transition-all', getLevelStyles(n.level, n.read, n.resolved))}
               >
                 <div className="flex items-start gap-4">
                   <div
                     className={cn(
                       'w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0',
-                      n.level === 'critical'
-                        ? 'bg-red-500/30 text-red-300'
-                        : n.level === 'warning'
-                        ? 'bg-amber-500/30 text-amber-300'
-                        : 'bg-blue-500/30 text-blue-300',
+                      n.level === 'critical' ? 'bg-red-500/30 text-red-300' :
+                      n.level === 'warning' ? 'bg-amber-500/30 text-amber-300' :
+                      'bg-blue-500/30 text-blue-300',
                     )}
                   >
                     <LevelIcon className="w-5 h-5" />
@@ -313,12 +303,7 @@ export default function Notifications() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <h4 className="font-semibold text-white">{n.ruleName}</h4>
-                          <span
-                            className={cn(
-                              'inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-medium border',
-                              getLevelBadgeStyles(n.level),
-                            )}
-                          >
+                          <span className={cn('inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-medium border', getLevelBadgeStyles(n.level))}>
                             {getLevelLabel(n.level)}
                           </span>
                           {!n.read && (
@@ -328,49 +313,95 @@ export default function Notifications() {
                           )}
                           {n.resolved && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                              <Check className="w-3 h-3" />
-                              已处理
+                              <Check className="w-3 h-3" />已处理
                             </span>
                           )}
                         </div>
                         <div className="flex items-center gap-3 mt-1 flex-wrap">
-                          <Link
-                            to={`/devices/${n.deviceId}`}
-                            className="text-sm text-primary-400 hover:text-primary-300 inline-block"
-                          >
+                          <Link to={`/devices/${n.deviceId}`} className="text-sm text-primary-400 hover:text-primary-300 inline-flex items-center gap-1">
+                            <ExternalLink className="w-3 h-3" />
                             设备：{n.deviceName}
+                          </Link>
+                          <Link to="/alert-rules" className="text-sm text-primary-400 hover:text-primary-300 inline-flex items-center gap-1">
+                            <Shield className="w-3 h-3" />
+                            查看规则
                           </Link>
                           <div className="flex items-center gap-1.5">
                             <span className="text-xs text-dark-400">通知渠道：</span>
                             <div className="flex gap-1">
                               {n.channels.includes('sms') && (
-                                <span
-                                  title="短信"
-                                  className="inline-flex items-center justify-center w-5 h-5 rounded bg-dark-700 text-dark-300"
-                                >
+                                <span title="短信" className="inline-flex items-center justify-center w-5 h-5 rounded bg-dark-700 text-dark-300">
                                   <Smartphone className="w-3 h-3" />
                                 </span>
                               )}
                               {n.channels.includes('email') && (
-                                <span
-                                  title="邮件"
-                                  className="inline-flex items-center justify-center w-5 h-5 rounded bg-dark-700 text-dark-300"
-                                >
+                                <span title="邮件" className="inline-flex items-center justify-center w-5 h-5 rounded bg-dark-700 text-dark-300">
                                   <Mail className="w-3 h-3" />
                                 </span>
                               )}
                               {n.channels.includes('in_app') && (
-                                <span
-                                  title="站内信"
-                                  className="inline-flex items-center justify-center w-5 h-5 rounded bg-dark-700 text-dark-300"
-                                >
+                                <span title="站内信" className="inline-flex items-center justify-center w-5 h-5 rounded bg-dark-700 text-dark-300">
                                   <MessageSquare className="w-3 h-3" />
                                 </span>
                               )}
                             </div>
                           </div>
                         </div>
+
                         <p className="text-sm text-dark-200 mt-2">{n.message}</p>
+
+                        {hitConditions.length > 0 && (
+                          <div className="mt-2">
+                            <button
+                              onClick={() => toggleConditions(n.id)}
+                              className="flex items-center gap-1.5 text-xs text-dark-400 hover:text-dark-300 transition-colors"
+                            >
+                              <span>
+                                条件命中详情：{hitCount}/{hitConditions.length} 项命中
+                                {logicLabel && <span className="ml-1 text-dark-500">({logicLabel})</span>}
+                              </span>
+                              {isCondExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                            </button>
+                            {isCondExpanded && (
+                              <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                {hitConditions.map((hc, i) => {
+                                  const unit = hc.metric === 'temperature' ? '°C' : '%'
+                                  return (
+                                    <div
+                                      key={i}
+                                      className={cn(
+                                        'flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs',
+                                        hc.hit ? 'bg-red-500/10 border border-red-500/20' : 'bg-dark-700/50 border border-dark-700',
+                                      )}
+                                    >
+                                      {hc.hit ? (
+                                        <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0" />
+                                      ) : (
+                                        <Check className="w-3 h-3 text-dark-500 flex-shrink-0" />
+                                      )}
+                                      <span className={cn(hc.hit ? 'text-red-300' : 'text-dark-400')}>
+                                        {getMetricLabel(hc.metric)}
+                                      </span>
+                                      <span className="text-dark-500">
+                                        {getOpLabel(hc.operator)} {hc.threshold}{unit}
+                                      </span>
+                                      <span className="text-dark-500">→</span>
+                                      <span className={cn(hc.hit ? 'text-red-400 font-medium' : 'text-dark-400')}>
+                                        {hc.actualValue}{unit}
+                                      </span>
+                                      <span className={cn(
+                                        'ml-auto px-1 py-0.5 rounded text-xs',
+                                        hc.hit ? 'bg-red-500/10 text-red-400' : 'bg-dark-700 text-dark-500',
+                                      )}>
+                                        {hc.hit ? '命中' : '未命中'}
+                                      </span>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
 
                         {n.resolved && n.resolvedBy && (
                           <div className="mt-3 pt-3 border-t border-dark-600/50">
@@ -378,30 +409,29 @@ export default function Notifications() {
                               <div className="flex items-center gap-2">
                                 <Check className="w-3.5 h-3.5 text-emerald-400" />
                                 <span className="text-sm text-emerald-400 font-medium">
-                                  处理人：{n.resolvedBy} ·{' '}
-                                  {n.resolvedAt && formatDateTime(n.resolvedAt)}
+                                  处理人：{n.resolvedBy} · {n.resolvedAt && formatDateTime(n.resolvedAt)}
                                 </span>
                               </div>
-                              {n.resolveNote && (
-                                <button
-                                  onClick={() => toggleNoteExpanded(n.id)}
-                                  className="flex items-center gap-1 text-xs text-dark-400 hover:text-dark-300 transition-colors"
-                                >
-                                  {isNoteExpanded ? '收起备注' : '查看备注'}
-                                  {isNoteExpanded ? (
-                                    <ChevronUp className="w-3 h-3" />
-                                  ) : (
-                                    <ChevronDown className="w-3 h-3" />
-                                  )}
-                                </button>
-                              )}
+                              <div className="flex items-center gap-2">
+                                {n.resolveNote && (
+                                  <button
+                                    onClick={() => toggleNoteExpanded(n.id)}
+                                    className="flex items-center gap-1 text-xs text-dark-400 hover:text-dark-300 transition-colors"
+                                  >
+                                    {isNoteExpanded ? '收起备注' : '查看备注'}
+                                    {isNoteExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                  </button>
+                                )}
+                                <Link to="/audit" className="flex items-center gap-1 text-xs text-primary-400 hover:text-primary-300">
+                                  <ExternalLink className="w-3 h-3" />
+                                  审计记录
+                                </Link>
+                              </div>
                             </div>
                             {isNoteExpanded && n.resolveNote && (
                               <div className="mt-2 p-3 bg-dark-800/50 rounded-lg border border-dark-600/50">
                                 <p className="text-xs text-dark-400 mb-1">处理备注：</p>
-                                <p className="text-sm text-dark-300 whitespace-pre-wrap">
-                                  {n.resolveNote}
-                                </p>
+                                <p className="text-sm text-dark-300 whitespace-pre-wrap">{n.resolveNote}</p>
                               </div>
                             )}
                           </div>
@@ -416,13 +446,8 @@ export default function Notifications() {
                       <div className="flex items-center gap-3"></div>
                       <div className="flex gap-2">
                         {!n.read && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => markNotificationRead(n.id)}
-                          >
-                            <Check className="w-4 h-4" />
-                            标记已读
+                          <Button variant="ghost" size="sm" onClick={() => markNotificationRead(n.id)}>
+                            <Check className="w-4 h-4" />标记已读
                           </Button>
                         )}
                         {!n.resolved && (
@@ -449,10 +474,7 @@ export default function Notifications() {
 
       {resolveModalOpen && currentNotification && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={closeResolveModal}
-          />
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={closeResolveModal} />
           <div className="relative bg-dark-800 border border-dark-700 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
             <div className="flex items-center justify-between px-6 py-4 border-b border-dark-700">
               <h3 className="text-lg font-semibold text-white flex items-center gap-2">
@@ -470,31 +492,61 @@ export default function Notifications() {
               <div className="space-y-3">
                 <div>
                   <p className="text-xs text-dark-400 mb-1">告警规则</p>
-                  <p className="text-sm text-white font-medium">
+                  <Link to="/alert-rules" className="text-sm text-white font-medium hover:text-primary-400 inline-flex items-center gap-1">
                     {currentNotification.ruleName}
-                  </p>
+                    <ExternalLink className="w-3 h-3" />
+                  </Link>
                 </div>
                 <div>
                   <p className="text-xs text-dark-400 mb-1">设备名称</p>
-                  <p className="text-sm text-white font-medium">
+                  <Link to={`/devices/${currentNotification.deviceId}`} className="text-sm text-white font-medium hover:text-primary-400 inline-flex items-center gap-1">
                     {currentNotification.deviceName}
-                  </p>
+                    <ExternalLink className="w-3 h-3" />
+                  </Link>
                 </div>
                 <div>
                   <p className="text-xs text-dark-400 mb-1">告警消息</p>
-                  <div
-                    className={cn(
-                      'p-3 rounded-lg text-sm border',
-                      currentNotification.level === 'critical'
-                        ? 'bg-red-500/10 border-red-500/30 text-red-300'
-                        : currentNotification.level === 'warning'
-                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-                        : 'bg-blue-500/10 border-blue-500/30 text-blue-300',
-                    )}
-                  >
+                  <div className={cn(
+                    'p-3 rounded-lg text-sm border',
+                    currentNotification.level === 'critical' ? 'bg-red-500/10 border-red-500/30 text-red-300' :
+                    currentNotification.level === 'warning' ? 'bg-amber-500/10 border-amber-500/30 text-amber-300' :
+                    'bg-blue-500/10 border-blue-500/30 text-blue-300',
+                  )}>
                     {currentNotification.message}
                   </div>
                 </div>
+                {currentNotification.hitConditions && currentNotification.hitConditions.length > 0 && (
+                  <div>
+                    <p className="text-xs text-dark-400 mb-1">命中条件详情</p>
+                    <div className="space-y-1">
+                      {currentNotification.hitConditions.map((hc, i) => {
+                        const unit = hc.metric === 'temperature' ? '°C' : '%'
+                        return (
+                          <div key={i} className={cn(
+                            'flex items-center gap-2 px-2 py-1 rounded text-xs',
+                            hc.hit ? 'bg-red-500/10 text-red-300' : 'bg-dark-700 text-dark-400',
+                          )}>
+                            {hc.hit ? <AlertTriangle className="w-3 h-3 text-red-400" /> : <Check className="w-3 h-3 text-dark-500" />}
+                            <span>{getMetricLabel(hc.metric)} {getOpLabel(hc.operator)} {hc.threshold}{unit}</span>
+                            <span className="text-dark-500">→</span>
+                            <span className={hc.hit ? 'text-red-400 font-medium' : ''}>{hc.actualValue}{unit}</span>
+                            <span className={cn(
+                              'ml-auto px-1 py-0.5 rounded',
+                              hc.hit ? 'bg-red-500/10 text-red-400' : 'bg-dark-700 text-dark-500',
+                            )}>
+                              {hc.hit ? '命中' : '未命中'}
+                            </span>
+                          </div>
+                        )
+                      })}
+                      {currentNotification.conditionLogic && (
+                        <p className="text-xs text-dark-500 mt-1">
+                          逻辑：{currentNotification.conditionLogic === 'all' ? '全部满足（AND）' : '任一满足（OR）'}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
               <div>
                 <label className="text-xs text-dark-400 mb-1 block">
@@ -519,9 +571,7 @@ export default function Notifications() {
               </div>
             </div>
             <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-700 bg-dark-800/50">
-              <Button variant="ghost" onClick={closeResolveModal}>
-                取消
-              </Button>
+              <Button variant="ghost" onClick={closeResolveModal}>取消</Button>
               <Button onClick={handleConfirmResolve}>确认处理</Button>
             </div>
           </div>

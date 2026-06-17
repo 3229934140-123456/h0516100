@@ -69,6 +69,14 @@ export interface AlertRule {
 
 export type AlertLevel = 'info' | 'warning' | 'critical'
 
+export interface HitConditionDetail {
+  metric: keyof DeviceMetrics
+  operator: AlertOperator
+  threshold: number
+  actualValue: number
+  hit: boolean
+}
+
 export interface AlertNotification {
   id: string
   ruleId: string
@@ -83,6 +91,8 @@ export interface AlertNotification {
   resolvedBy?: string
   resolvedAt?: Date | string
   resolveNote?: string
+  hitConditions?: HitConditionDetail[]
+  conditionLogic?: AlertLogic
   timestamp: Date | string
 }
 
@@ -118,4 +128,22 @@ export interface TimeSeriesData {
   time: string
   timestamp?: number
   value: number
+}
+
+export interface SimulationRecord {
+  id: string
+  time: Date | string
+  deviceId: string
+  deviceName: string
+  metrics: { temperature: number; battery: number; signal: number }
+  protocol: 'MQTT' | 'HTTP'
+  results: SimulationRuleResult[]
+}
+
+export interface SimulationRuleResult {
+  ruleId: string
+  ruleName: string
+  triggered: boolean
+  conditionLogic: AlertLogic
+  conditions: HitConditionDetail[]
 }

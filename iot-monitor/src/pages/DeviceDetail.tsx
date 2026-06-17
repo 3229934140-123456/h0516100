@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -15,6 +15,9 @@ import {
   Send,
   RefreshCw,
   Download,
+  Table2,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react'
 import {
   LineChart,
@@ -33,8 +36,9 @@ import { useStore } from '../store'
 import { formatDateTime, cn } from '../utils'
 import type { TimeSeriesData } from '../types'
 
-type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d' | 'custom'
 type MetricKey = 'temperature' | 'battery' | 'signal'
+
+type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d' | 'custom'
 
 const commandOptions = [
   { value: '重启设备', label: '重启设备' },
@@ -56,6 +60,12 @@ const metricLabels: Record<MetricKey, string> = {
   signal: '信号',
 }
 
+const metricUnits: Record<MetricKey, string> = {
+  temperature: '°C',
+  battery: '%',
+  signal: '%',
+}
+
 const timeRangeToHours: Record<Exclude<TimeRange, 'custom'>, number> = {
   '1h': 1,
   '6h': 6,
@@ -72,6 +82,7 @@ export default function DeviceDetail() {
     getDeviceTimeSeries,
     filterTimeSeriesByRange,
     sendCommand,
+    state,
   } = useStore()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -87,11 +98,19 @@ export default function DeviceDetail() {
   const [showCommandModal, setShowCommandModal] = useState(false)
   const [selectedCommand, setSelectedCommand] = useState('')
   const [commandParams, setCommandParams] = useState('')
+  const [showRawTable, setShowRawTable] = useState(false)
+  const [tablePage, setTablePage] = useState(0)
+  const tablePageSize = 20
 
   const device = id ? getDeviceById(id) : undefined
   const group = device ? getGroupById(device.groupId) : undefined
   const deviceCommands = id ? getCommandsByDevice(id) : []
   const rawTs = id ? getDeviceTimeSeries(id) : null
+
+  const deviceNotifications = useMemo(() => {
+    if (!id) return []
+    return state.notifications.filter((n) => n.deviceId === id)
+  }, [state.notifications, id])
 
   const toggleMetric = (key: MetricKey) => {
     setSelectedMetrics((prev) => ({ ...prev, [key]: !prev[key] }))
@@ -113,8 +132,8 @@ export default function DeviceDetail() {
         ? filterTimeSeriesByRange(rawTs.signal, timeRangeToHours[timeRange])
         : filterTimeSeriesCustom(rawTs.signal, customStart, customEnd)
 
-    const len = Math.max(filteredTemp.length, filteredBattery.length, filteredSignal.length)
-    if (len === 0) return []
+    const maxLen = Math.max(filteredTemp.length, filteredBattery.length, filteredSignal.length)
+    if (maxLen === 0) return []
 
     const result: Array<{
       time: string
@@ -124,22 +143,20 @@ export default function DeviceDetail() {
       signal?: number
     }> = []
 
-    for (let i = 0; i < len; i++) {
+    for (let i = 0; i < maxLen; i++) {
       const t = filteredTemp[i]
       const b = filteredBattery[i]
       const s = filteredSignal[i]
-      const timePoint = t?.time || b?.time || s?.time || ''
-      const tsPoint = t?.timestamp ?? b?.timestamp ?? s?.timestamp
       result.push({
-        time: timePoint,
-        timestamp: tsPoint,
+        time: t?.time || b?.time || s?.time || '',
+        timestamp: t?.timestamp ?? b?.timestamp ?? s?.timestamp,
         temperature: t?.value,
         battery: b?.value,
         signal: s?.value,
       })
     }
 
-    if (result.length > 0) {
+    if (result.length > 0 && device) {
       const last = { ...result[result.length - 1] }
       if (selectedMetrics.temperature && device.metrics.temperature !== undefined) {
         last.temperature = device.metrics.temperature
@@ -155,6 +172,25 @@ export default function DeviceDetail() {
 
     return result
   }, [rawTs, device, timeRange, customStart, customEnd, filterTimeSeriesByRange, selectedMetrics])
+
+  const handleExportCSV = useCallback(() => {
+    if (!chartData.length || !device) return
+    const metrics = (Object.keys(selectedMetrics) as MetricKey[]).filter((k) => selectedMetrics[k])
+    const header = ['时间', ...metrics.map((m) => `${metricLabels[m]}(${metricUnits[m]})`)]
+    const rows = chartData.map((row) => {
+      const timeStr = row.timestamp ? new Date(row.timestamp).toLocaleString('zh-CN') : row.time
+      return [timeStr, ...metrics.map((m) => (row as any)[m]?.toString() ?? '-')]
+    })
+    const csv = [header, ...rows].map((r) => r.join(',')).join('\n')
+    const BOM = '\uFEFF'
+    const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${device.name}_历史数据_${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [chartData, selectedMetrics, device])
 
   if (!device) {
     return (
@@ -203,6 +239,10 @@ export default function DeviceDetail() {
   ]
 
   const metricList: MetricKey[] = ['temperature', 'battery', 'signal']
+  const activeMetrics = metricList.filter((m) => selectedMetrics[m])
+
+  const totalTablePages = Math.ceil(chartData.length / tablePageSize)
+  const paginatedData = chartData.slice(tablePage * tablePageSize, (tablePage + 1) * tablePageSize)
 
   return (
     <div className="space-y-6">
@@ -283,7 +323,7 @@ export default function DeviceDetail() {
                     {timeRanges.map((r) => (
                       <button
                         key={r.key}
-                        onClick={() => setTimeRange(r.key)}
+                        onClick={() => { setTimeRange(r.key); setTablePage(0) }}
                         className={cn(
                           'px-3 py-1.5 text-sm rounded-md transition-colors',
                           timeRange === r.key
@@ -295,9 +335,9 @@ export default function DeviceDetail() {
                       </button>
                     ))}
                   </div>
-                  <Button variant="secondary" size="sm">
+                  <Button variant="secondary" size="sm" onClick={handleExportCSV}>
                     <Download className="w-4 h-4" />
-                    导出
+                    导出CSV
                   </Button>
                 </div>
                 <div className="flex items-center gap-4">
@@ -321,20 +361,30 @@ export default function DeviceDetail() {
                       </label>
                     ))}
                   </div>
+                  <button
+                    onClick={() => setShowRawTable(!showRawTable)}
+                    className={cn(
+                      'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors',
+                      showRawTable ? 'bg-primary-600 text-white' : 'bg-dark-700 text-dark-300 hover:text-white',
+                    )}
+                  >
+                    <Table2 className="w-3.5 h-3.5" />
+                    数据表
+                  </button>
                 </div>
                 {timeRange === 'custom' && (
                   <div className="flex items-center gap-2">
                     <input
                       type="datetime-local"
                       value={customStart}
-                      onChange={(e) => setCustomStart(e.target.value)}
+                      onChange={(e) => { setCustomStart(e.target.value); setTablePage(0) }}
                       className="h-8 bg-dark-700 border border-dark-600 rounded-lg px-3 text-xs text-white focus:outline-none focus:border-primary-500 transition-colors"
                     />
                     <span className="text-dark-400 text-sm">至</span>
                     <input
                       type="datetime-local"
                       value={customEnd}
-                      onChange={(e) => setCustomEnd(e.target.value)}
+                      onChange={(e) => { setCustomEnd(e.target.value); setTablePage(0) }}
                       className="h-8 bg-dark-700 border border-dark-600 rounded-lg px-3 text-xs text-white focus:outline-none focus:border-primary-500 transition-colors"
                     />
                   </div>
@@ -374,37 +424,13 @@ export default function DeviceDetail() {
                         formatter={(value: string) => metricLabels[value as MetricKey] || value}
                       />
                       {selectedMetrics.temperature && (
-                        <Line
-                          type="monotone"
-                          dataKey="temperature"
-                          stroke={metricColors.temperature}
-                          strokeWidth={2}
-                          dot={false}
-                          activeDot={{ r: 4 }}
-                          name="temperature"
-                        />
+                        <Line type="monotone" dataKey="temperature" stroke={metricColors.temperature} strokeWidth={2} dot={false} activeDot={{ r: 4 }} name="temperature" />
                       )}
                       {selectedMetrics.battery && (
-                        <Line
-                          type="monotone"
-                          dataKey="battery"
-                          stroke={metricColors.battery}
-                          strokeWidth={2}
-                          dot={false}
-                          activeDot={{ r: 4 }}
-                          name="battery"
-                        />
+                        <Line type="monotone" dataKey="battery" stroke={metricColors.battery} strokeWidth={2} dot={false} activeDot={{ r: 4 }} name="battery" />
                       )}
                       {selectedMetrics.signal && (
-                        <Line
-                          type="monotone"
-                          dataKey="signal"
-                          stroke={metricColors.signal}
-                          strokeWidth={2}
-                          dot={false}
-                          activeDot={{ r: 4 }}
-                          name="signal"
-                        />
+                        <Line type="monotone" dataKey="signal" stroke={metricColors.signal} strokeWidth={2} dot={false} activeDot={{ r: 4 }} name="signal" />
                       )}
                     </LineChart>
                   </ResponsiveContainer>
@@ -414,8 +440,125 @@ export default function DeviceDetail() {
                   <p className="text-dark-400">暂无历史数据</p>
                 </div>
               )}
+
+              {showRawTable && chartData.length > 0 && (
+                <div className="mt-6 border-t border-dark-700 pt-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-sm font-medium text-white">原始数据点（共 {chartData.length} 条）</h4>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setTablePage(Math.max(0, tablePage - 1))}
+                        disabled={tablePage === 0}
+                        className="p-1 rounded bg-dark-700 text-dark-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <span className="text-xs text-dark-400">
+                        {tablePage + 1} / {totalTablePages}
+                      </span>
+                      <button
+                        onClick={() => setTablePage(Math.min(totalTablePages - 1, tablePage + 1))}
+                        disabled={tablePage >= totalTablePages - 1}
+                        className="p-1 rounded bg-dark-700 text-dark-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-dark-700">
+                          <th className="text-left py-2 px-3 text-dark-400 font-medium">时间</th>
+                          {activeMetrics.map((m) => (
+                            <th key={m} className="text-right py-2 px-3 font-medium" style={{ color: metricColors[m] }}>
+                              {metricLabels[m]} ({metricUnits[m]})
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-dark-700/50">
+                        {paginatedData.map((row, idx) => (
+                          <tr key={idx} className="hover:bg-dark-700/30">
+                            <td className="py-2 px-3 text-dark-300 text-xs whitespace-nowrap">
+                              {row.timestamp ? new Date(row.timestamp).toLocaleString('zh-CN') : row.time}
+                            </td>
+                            {activeMetrics.map((m) => (
+                              <td key={m} className="py-2 px-3 text-right text-xs text-white font-mono">
+                                {(row as any)[m] !== undefined ? (row as any)[m].toFixed(1) : '-'}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           </Card>
+
+          {deviceNotifications.length > 0 && (
+            <Card title="设备告警记录" subtitle="该设备相关的告警通知">
+              <div className="space-y-2">
+                {deviceNotifications.slice(0, 10).map((n) => (
+                  <div
+                    key={n.id}
+                    className={cn(
+                      'p-3 rounded-lg border flex items-start justify-between',
+                      n.resolved ? 'bg-dark-700/20 border-dark-700' :
+                      n.level === 'critical' ? 'bg-red-500/5 border-red-500/20' :
+                      n.level === 'warning' ? 'bg-amber-500/5 border-amber-500/20' :
+                      'bg-blue-500/5 border-blue-500/20',
+                    )}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-white">{n.ruleName}</span>
+                        <span className={cn(
+                          'px-1.5 py-0.5 rounded text-xs',
+                          n.level === 'critical' ? 'bg-red-500/10 text-red-400' :
+                          n.level === 'warning' ? 'bg-amber-500/10 text-amber-400' :
+                          'bg-blue-500/10 text-blue-400',
+                        )}>
+                          {n.level === 'critical' ? '严重' : n.level === 'warning' ? '警告' : '提示'}
+                        </span>
+                        {n.resolved && (
+                          <span className="px-1.5 py-0.5 rounded text-xs bg-emerald-500/10 text-emerald-400">已处理</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-dark-400 mt-1 truncate">{n.message}</p>
+                      {n.hitConditions && n.hitConditions.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-1.5">
+                          {n.hitConditions.map((hc, i) => (
+                            <span
+                              key={i}
+                              className={cn(
+                                'text-xs px-1.5 py-0.5 rounded',
+                                hc.hit ? 'bg-red-500/10 text-red-400' : 'bg-dark-700 text-dark-500',
+                              )}
+                            >
+                              {hc.metric === 'temperature' ? '温度' : hc.metric === 'battery' ? '电量' : '信号'}{' '}
+                              {hc.hit ? '命中' : '未命中'}({hc.actualValue})
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-col items-end gap-1 ml-3 flex-shrink-0">
+                      <span className="text-xs text-dark-400">{formatDateTime(n.timestamp)}</span>
+                      <Link to="/notifications" className="text-xs text-primary-400 hover:text-primary-300">查看通知</Link>
+                    </div>
+                  </div>
+                ))}
+                {deviceNotifications.length > 10 && (
+                  <Link to="/notifications" className="block text-center text-sm text-primary-400 hover:text-primary-300 pt-2">
+                    查看全部 {deviceNotifications.length} 条通知 →
+                  </Link>
+                )}
+              </div>
+            </Card>
+          )}
         </div>
 
         <div className="space-y-6">

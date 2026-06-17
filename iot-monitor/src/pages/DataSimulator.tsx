@@ -10,68 +10,87 @@ import {
   Zap,
   CheckCircle2,
   AlertTriangle,
+  XCircle,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import StatusBadge from '../components/ui/StatusBadge'
 import { useStore } from '../store'
 import { cn, formatDateTime } from '../utils'
+import type { AlertLogic, HitConditionDetail, SimulationRuleResult } from '../types'
 
 export default function DataSimulator() {
-  const { state, reportDeviceData } = useStore()
-  const { devices, alertRules, notifications } = state
+  const { state, reportDeviceData, addSimulationRecord } = useStore()
+  const { devices, alertRules } = state
+  const simulationRecords = state.simulationRecords || []
 
   const [selectedDeviceId, setSelectedDeviceId] = useState(devices[0]?.id || '')
   const [temperature, setTemperature] = useState(45)
   const [battery, setBattery] = useState(80)
   const [signal, setSignal] = useState(90)
   const [protocol, setProtocol] = useState<'MQTT' | 'HTTP'>('MQTT')
-  const [reportHistory, setReportHistory] = useState<
-    { time: Date; deviceId: string; deviceName: string; metrics: { temperature: number; battery: number; signal: number }; triggeredAlerts: string[] }[]
-  >([])
+  const [expandedRecord, setExpandedRecord] = useState<string | null>(null)
 
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId)
 
   const matchingRules = alertRules.filter((rule) => {
-    if (!rule.enabled || rule.condition.type !== 'metric') return false
+    if (!rule.enabled) return false
     if (!selectedDevice) return false
     const appliesToGroup = rule.groupIds.includes(selectedDevice.groupId)
     const appliesToDevice = rule.deviceIds.includes(selectedDeviceId)
     return appliesToGroup || appliesToDevice
   })
 
+  const evaluateRule = (rule: typeof alertRules[0], metrics: { temperature: number; battery: number; signal: number }) => {
+    const conditions = rule.conditions?.length ? rule.conditions : [rule.condition]
+    const hitDetails: HitConditionDetail[] = conditions
+      .filter((c) => c.type === 'metric' && c.metric && c.operator && c.threshold !== undefined)
+      .map((c) => {
+        const actualValue = (metrics as any)[c.metric!] ?? 0
+        let hit = false
+        switch (c.operator!) {
+          case '>': hit = actualValue > c.threshold!; break
+          case '>=': hit = actualValue >= c.threshold!; break
+          case '<': hit = actualValue < c.threshold!; break
+          case '<=': hit = actualValue <= c.threshold!; break
+          case '==': hit = actualValue === c.threshold!; break
+          case '!=': hit = actualValue !== c.threshold!; break
+        }
+        return { metric: c.metric!, operator: c.operator!, threshold: c.threshold!, actualValue, hit }
+      })
+
+    const triggered = rule.conditionLogic === 'all'
+      ? hitDetails.every((h) => h.hit)
+      : hitDetails.some((h) => h.hit)
+
+    return {
+      ruleId: rule.id,
+      ruleName: rule.name,
+      triggered,
+      conditionLogic: rule.conditionLogic as AlertLogic,
+      conditions: hitDetails,
+    }
+  }
+
   const handleReport = () => {
     if (!selectedDeviceId) return
 
     const metrics = { temperature, battery, signal }
 
-    const beforeAlertCount = state.notifications.length
+    const results = matchingRules.map((rule) => evaluateRule(rule, metrics))
 
     reportDeviceData(selectedDeviceId, metrics, protocol)
 
-    const afterAlertCount = state.notifications.length
-    const newAlertCount = afterAlertCount - beforeAlertCount
-
-    const triggeredAlerts: string[] = []
-    if (newAlertCount > 0) {
-      const newNotifs = state.notifications.slice(0, newAlertCount)
-      newNotifs.forEach((n) => {
-        if (!triggeredAlerts.includes(n.ruleName)) {
-          triggeredAlerts.push(n.ruleName)
-        }
-      })
-    }
-
-    setReportHistory((prev) => [
-      {
-        time: new Date(),
-        deviceId: selectedDeviceId,
-        deviceName: selectedDevice?.name || '',
-        metrics: { ...metrics },
-        triggeredAlerts,
-      },
-      ...prev.slice(0, 19),
-    ])
+    addSimulationRecord({
+      time: new Date(),
+      deviceId: selectedDeviceId,
+      deviceName: selectedDevice?.name || '',
+      metrics: { ...metrics },
+      protocol,
+      results,
+    })
   }
 
   const handleRandomReport = () => {
@@ -83,6 +102,12 @@ export default function DataSimulator() {
     setBattery(randomBattery)
     setSignal(randomSignal)
   }
+
+  const getMetricLabel = (m: string) =>
+    m === 'temperature' ? '温度' : m === 'battery' ? '电量' : '信号'
+
+  const getOpLabel = (op: string) =>
+    op === '>' ? '超过' : op === '<' ? '低于' : op === '>=' ? '不低于' : op === '<=' ? '不高于' : op === '==' ? '等于' : '不等于'
 
   return (
     <div className="space-y-6">
@@ -229,63 +254,74 @@ export default function DataSimulator() {
             </div>
           </Card>
 
-          <Card title="上报记录" subtitle="最近的数据上报操作">
-            {reportHistory.length > 0 ? (
+          <Card title="模拟记录" subtitle="最近的数据上报及规则触发详情（刷新后保留）">
+            {simulationRecords.length > 0 ? (
               <div className="space-y-3">
-                {reportHistory.map((record, idx) => (
-                  <div
-                    key={idx}
-                    className={cn(
-                      'p-4 rounded-xl border',
-                      record.triggeredAlerts.length > 0
-                        ? 'bg-red-500/5 border-red-500/20'
-                        : 'bg-dark-700/30 border-dark-700',
-                    )}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-white">{record.deviceName}</span>
-                          {record.triggeredAlerts.length > 0 && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-red-500/10 text-red-400 border border-red-500/30">
-                              <AlertTriangle className="w-3 h-3" />
-                              触发告警
-                            </span>
-                          )}
-                          {record.triggeredAlerts.length === 0 && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                              <CheckCircle2 className="w-3 h-3" />
-                              正常
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex gap-4 mt-2">
-                          <span className="text-xs text-dark-400">
-                            温度：<span className={cn(record.metrics.temperature > 80 ? 'text-red-400' : 'text-white')}>{record.metrics.temperature}°C</span>
-                          </span>
-                          <span className="text-xs text-dark-400">
-                            电量：<span className={cn(record.metrics.battery < 20 ? 'text-red-400' : 'text-white')}>{record.metrics.battery}%</span>
-                          </span>
-                          <span className="text-xs text-dark-400">
-                            信号：<span className={cn(record.metrics.signal < 30 ? 'text-red-400' : 'text-white')}>{record.metrics.signal}%</span>
-                          </span>
-                        </div>
-                        {record.triggeredAlerts.length > 0 && (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {record.triggeredAlerts.map((alert) => (
-                              <span key={alert} className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-amber-500/10 text-amber-400 border border-amber-500/30">
-                                {alert}
+                {simulationRecords.map((record) => {
+                  const hasTriggered = record.results.some((r) => r.triggered)
+                  const isExpanded = expandedRecord === record.id
+
+                  return (
+                    <div
+                      key={record.id}
+                      className={cn(
+                        'p-4 rounded-xl border',
+                        hasTriggered
+                          ? 'bg-red-500/5 border-red-500/20'
+                          : 'bg-dark-700/30 border-dark-700',
+                      )}
+                    >
+                      <div
+                        className="flex items-start justify-between cursor-pointer"
+                        onClick={() => setExpandedRecord(isExpanded ? null : record.id)}
+                      >
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-white">{record.deviceName}</span>
+                            <span className="text-xs text-dark-500">{record.protocol}</span>
+                            {hasTriggered && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-red-500/10 text-red-400 border border-red-500/30">
+                                <AlertTriangle className="w-3 h-3" />
+                                {record.results.filter((r) => r.triggered).length} 条规则触发
                               </span>
-                            ))}
+                            )}
+                            {!hasTriggered && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                <CheckCircle2 className="w-3 h-3" />
+                                全部正常
+                              </span>
+                            )}
                           </div>
-                        )}
+                          <div className="flex gap-4 mt-2">
+                            <span className="text-xs text-dark-400">
+                              温度：<span className={cn(record.metrics.temperature > 80 ? 'text-red-400' : 'text-white')}>{record.metrics.temperature}°C</span>
+                            </span>
+                            <span className="text-xs text-dark-400">
+                              电量：<span className={cn(record.metrics.battery < 20 ? 'text-red-400' : 'text-white')}>{record.metrics.battery}%</span>
+                            </span>
+                            <span className="text-xs text-dark-400">
+                              信号：<span className={cn(record.metrics.signal < 30 ? 'text-red-400' : 'text-white')}>{record.metrics.signal}%</span>
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-dark-400 whitespace-nowrap">
+                            {formatDateTime(record.time)}
+                          </span>
+                          {isExpanded ? <ChevronUp className="w-4 h-4 text-dark-400" /> : <ChevronDown className="w-4 h-4 text-dark-400" />}
+                        </div>
                       </div>
-                      <span className="text-xs text-dark-400 whitespace-nowrap">
-                        {formatDateTime(record.time)}
-                      </span>
+
+                      {isExpanded && (
+                        <div className="mt-3 pt-3 border-t border-dark-700 space-y-2">
+                          {record.results.map((result) => (
+                            <RuleResultDetail key={result.ruleId} result={result} />
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             ) : (
               <div className="text-center py-8 text-dark-400">
@@ -349,33 +385,103 @@ export default function DataSimulator() {
           <Card title="匹配的告警规则" subtitle="当前设备适用的已启用规则">
             {matchingRules.length > 0 ? (
               <div className="space-y-3">
-                {matchingRules.map((rule) => (
-                  <div key={rule.id} className="p-3 rounded-lg bg-dark-700/30 border border-dark-700">
-                    <div className="flex items-center gap-2 mb-1">
-                      <AlertTriangle className="w-4 h-4 text-amber-400" />
-                      <span className="text-sm font-medium text-white">{rule.name}</span>
-                    </div>
-                    <p className="text-xs text-dark-400">
-                      {rule.condition.metric === 'temperature' && `温度 ${rule.condition.operator} ${rule.condition.threshold}°C`}
-                      {rule.condition.metric === 'battery' && `电量 ${rule.condition.operator} ${rule.condition.threshold}%`}
-                      {rule.condition.metric === 'signal' && `信号 ${rule.condition.operator} ${rule.condition.threshold}%`}
-                    </p>
-                    <div className="flex items-center gap-1 mt-2">
-                      <span className="text-xs text-dark-500">通知：</span>
-                      {rule.channels.map((ch) => (
-                        <span key={ch} className="text-xs text-dark-400">
-                          {ch === 'sms' ? '短信' : ch === 'email' ? '邮件' : '站内信'}
+                {matchingRules.map((rule) => {
+                  const conditions = rule.conditions?.length ? rule.conditions : [rule.condition]
+                  return (
+                    <div key={rule.id} className="p-3 rounded-lg bg-dark-700/30 border border-dark-700">
+                      <div className="flex items-center gap-2 mb-1">
+                        <AlertTriangle className="w-4 h-4 text-amber-400" />
+                        <span className="text-sm font-medium text-white">{rule.name}</span>
+                        <span className="text-xs text-dark-500">
+                          ({rule.conditionLogic === 'all' ? '全部满足' : '任一满足'})
                         </span>
-                      ))}
+                      </div>
+                      <div className="space-y-1">
+                        {conditions.filter((c) => c.type === 'metric').map((c, idx) => (
+                          <p key={idx} className="text-xs text-dark-400">
+                            {c.metric === 'temperature' ? '温度' : c.metric === 'battery' ? '电量' : '信号'} {c.operator} {c.threshold}
+                            {c.metric === 'temperature' ? '°C' : '%'}
+                          </p>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-1 mt-2">
+                        <span className="text-xs text-dark-500">通知：</span>
+                        {rule.channels.map((ch) => (
+                          <span key={ch} className="text-xs text-dark-400">
+                            {ch === 'sms' ? '短信' : ch === 'email' ? '邮件' : '站内信'}
+                          </span>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             ) : (
               <p className="text-sm text-dark-400 text-center py-4">当前设备无匹配规则</p>
             )}
           </Card>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function RuleResultDetail({ result }: { result: SimulationRuleResult }) {
+  const getMetricLabel = (m: string) =>
+    m === 'temperature' ? '温度' : m === 'battery' ? '电量' : '信号'
+  const getOpLabel = (op: string) =>
+    op === '>' ? '超过' : op === '<' ? '低于' : op === '>=' ? '不低于' : op === '<=' ? '不高于' : op === '==' ? '等于' : '不等于'
+  const logicLabel = result.conditionLogic === 'all' ? '且（AND）' : '或（OR）'
+  const hitCount = result.conditions.filter((c) => c.hit).length
+
+  return (
+    <div className={cn(
+      'p-3 rounded-lg border',
+      result.triggered ? 'bg-red-500/5 border-red-500/20' : 'bg-emerald-500/5 border-emerald-500/20',
+    )}>
+      <div className="flex items-center gap-2 mb-2">
+        {result.triggered ? (
+          <AlertTriangle className="w-4 h-4 text-red-400" />
+        ) : (
+          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+        )}
+        <span className="text-sm font-medium text-white">{result.ruleName}</span>
+        <span className="text-xs text-dark-500">{logicLabel}</span>
+        {result.triggered && (
+          <span className="ml-auto text-xs text-red-400">
+            {hitCount}/{result.conditions.length} 项命中
+          </span>
+        )}
+        {!result.triggered && (
+          <span className="ml-auto text-xs text-emerald-400">未触发</span>
+        )}
+      </div>
+      <div className="space-y-1.5">
+        {result.conditions.map((cond, idx) => {
+          const unit = cond.metric === 'temperature' ? '°C' : '%'
+          return (
+            <div key={idx} className="flex items-center gap-2 text-xs">
+              {cond.hit ? (
+                <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0" />
+              ) : (
+                <XCircle className="w-3 h-3 text-dark-500 flex-shrink-0" />
+              )}
+              <span className={cn(cond.hit ? 'text-red-300' : 'text-dark-400')}>
+                {getMetricLabel(cond.metric)} {getOpLabel(cond.operator)} {cond.threshold}{unit}
+              </span>
+              <span className="text-dark-500">→</span>
+              <span className={cn(cond.hit ? 'text-red-400 font-medium' : 'text-dark-400')}>
+                当前 {cond.actualValue}{unit}
+              </span>
+              <span className={cn(
+                'px-1.5 py-0.5 rounded text-xs',
+                cond.hit ? 'bg-red-500/10 text-red-400' : 'bg-dark-700 text-dark-500',
+              )}>
+                {cond.hit ? '命中' : '未命中'}
+              </span>
+            </div>
+          )
+        })}
       </div>
     </div>
   )

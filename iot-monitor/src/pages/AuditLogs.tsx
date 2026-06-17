@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   FileText,
   Search,
@@ -12,6 +13,8 @@ import {
   Globe,
   ChevronDown,
   ChevronUp,
+  Bell,
+  ExternalLink,
 } from 'lucide-react'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
@@ -29,7 +32,7 @@ export default function AuditLogs() {
   const [moduleFilter, setModuleFilter] = useState('all')
   const [actionFilter, setActionFilter] = useState('all')
 
-  const modules = ['系统', '设备管理', '告警管理', '分组管理', '用户管理']
+  const modules = ['系统', '设备管理', '告警管理', '分组管理', '用户管理', '通知管理']
 
   const filteredLogs = state.auditLogs.filter((log) => {
     const matchesSearch =
@@ -61,6 +64,8 @@ export default function AuditLogs() {
         return Layers
       case '系统':
         return Settings
+      case '通知管理':
+        return Bell
       default:
         return User
     }
@@ -76,9 +81,25 @@ export default function AuditLogs() {
         return 'text-purple-400 bg-purple-500/10'
       case '系统':
         return 'text-slate-400 bg-slate-500/10'
+      case '通知管理':
+        return 'text-red-400 bg-red-500/10'
       default:
         return 'text-primary-400 bg-primary-500/10'
     }
+  }
+
+  const getTargetLink = (log: AuditLog) => {
+    if (!log.targetId) return null
+    if (log.module === '设备管理' || log.module === '通知管理') {
+      const device = state.devices.find((d) => d.id === log.targetId)
+      if (device) return `/devices/${device.id}`
+      const notif = state.notifications.find((n) => n.id === log.targetId)
+      if (notif) return `/devices/${notif.deviceId}`
+    }
+    if (log.module === '告警管理') return '/alert-rules'
+    if (log.module === '分组管理') return '/groups'
+    if (log.module === '通知管理') return '/notifications'
+    return null
   }
 
   return (
@@ -186,6 +207,7 @@ export default function AuditLogs() {
               <tbody className="divide-y divide-dark-700">
                 {filteredLogs.map((log: AuditLog) => {
                   const ModuleIcon = getModuleIcon(log.module)
+                  const targetLink = getTargetLink(log)
                   return (
                     <tr key={log.id} className="hover:bg-dark-700/30 transition-colors">
                       <td className="px-6 py-4">
@@ -211,11 +233,22 @@ export default function AuditLogs() {
                       <td className="px-6 py-4">
                         <div>
                           <p className="text-sm text-dark-300">{log.detail}</p>
-                          {log.targetName && (
-                            <p className="text-xs text-dark-500 mt-0.5">
-                              目标：{log.targetName}
-                            </p>
-                          )}
+                          <div className="flex items-center gap-2 mt-0.5">
+                            {log.targetName && (
+                              <p className="text-xs text-dark-500">
+                                目标：{log.targetName}
+                              </p>
+                            )}
+                            {targetLink && (
+                              <Link
+                                to={targetLink}
+                                className="inline-flex items-center gap-0.5 text-xs text-primary-400 hover:text-primary-300"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                查看
+                              </Link>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-6 py-4">

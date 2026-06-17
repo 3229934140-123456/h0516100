@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
   Plus,
@@ -15,7 +16,10 @@ import {
   ToggleRight,
   Users,
   ChevronDown,
+  ChevronUp,
   X,
+  ExternalLink,
+  Check,
 } from 'lucide-react'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
@@ -194,6 +198,23 @@ export default function AlertRules() {
     }
   }
 
+  const [expandedNotifs, setExpandedNotifs] = useState<Set<string>>(new Set())
+
+  const toggleNotifExpanded = (id: string) => {
+    setExpandedNotifs((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const getMetricLabel = (m: string) =>
+    m === 'temperature' ? '温度' : m === 'battery' ? '电量' : '信号'
+
+  const getOpLabel = (op: string) =>
+    op === '>' ? '超过' : op === '<' ? '低于' : op === '>=' ? '不低于' : op === '<=' ? '不高于' : op === '==' ? '等于' : '不等于'
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -243,23 +264,33 @@ export default function AlertRules() {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="bg-dark-700/50 rounded-lg p-3">
                       <p className="text-xs text-dark-400 mb-2">触发条件</p>
-                      <div className="flex items-center gap-2">
-                        {rule.condition.type === 'metric' ? (
-                          <>
-                            <MetricIcon className="w-4 h-4 text-primary-400" />
-                            <span className="text-sm text-white">
-                              {getStatusLabel(rule.condition.metric || '')}{' '}
-                              {getOperatorLabel(rule.condition.operator as AlertOperator)}{' '}
-                              {rule.condition.threshold}
-                            </span>
-                          </>
-                        ) : (
-                          <>
+                      <div className="space-y-1.5">
+                        {(rule.conditions?.length ? rule.conditions : [rule.condition])
+                          .filter((c) => c.type === 'metric')
+                          .map((c, idx) => {
+                            const MIcon = getMetricIcon(c.metric)
+                            return (
+                              <div key={idx} className="flex items-center gap-2">
+                                <MIcon className="w-4 h-4 text-primary-400" />
+                                <span className="text-sm text-white">
+                                  {getStatusLabel(c.metric || '')} {getOperatorLabel(c.operator as AlertOperator)} {c.threshold}
+                                  {c.metric === 'temperature' ? '°C' : '%'}
+                                </span>
+                                {idx === 0 && (rule.conditions?.length || 1) > 1 && (
+                                  <span className="text-xs text-dark-500 ml-1">
+                                    ({rule.conditionLogic === 'all' ? '且' : '或'})
+                                  </span>
+                                )}
+                              </div>
+                            )
+                          })}
+                        {rule.condition.type === 'offline' && (
+                          <div className="flex items-center gap-2">
                             <Clock className="w-4 h-4 text-amber-400" />
                             <span className="text-sm text-white">
                               设备离线超过 {rule.condition.duration} 分钟
                             </span>
-                          </>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -367,30 +398,73 @@ export default function AlertRules() {
                         {triggeredNotifications.length === 0 ? (
                           <span className="text-xs text-dark-400">暂无触发记录</span>
                         ) : (
-                          triggeredNotifications.slice(0, 5).map((n) => (
-                            <div
-                              key={n.id}
-                              className="flex items-center gap-2 py-1.5 px-2 rounded bg-dark-700/30"
-                            >
-                              <span
-                                className={cn(
-                                  'w-2 h-2 rounded-full flex-shrink-0',
-                                  getLevelColor(n.level),
+                          triggeredNotifications.slice(0, 5).map((n) => {
+                            const isExpanded = expandedNotifs.has(n.id)
+                            const hitConds = n.hitConditions || []
+                            const hitCount = hitConds.filter((h) => h.hit).length
+                            return (
+                              <div
+                                key={n.id}
+                                className="py-1.5 px-2 rounded bg-dark-700/30"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className={cn(
+                                      'w-2 h-2 rounded-full flex-shrink-0',
+                                      getLevelColor(n.level),
+                                    )}
+                                  />
+                                  <Link
+                                    to={`/devices/${n.deviceId}`}
+                                    className="text-sm text-primary-400 hover:text-primary-300 truncate flex-shrink-0"
+                                  >
+                                    {n.deviceName}
+                                  </Link>
+                                  <span className="text-xs text-dark-300 truncate flex-1 min-w-0">
+                                    {hitConds.length > 0
+                                      ? `${hitCount}/${hitConds.length} 项命中`
+                                      : n.message.length > 30
+                                      ? `${n.message.slice(0, 30)}...`
+                                      : n.message
+                                    }
+                                  </span>
+                                  {hitConds.length > 0 && (
+                                    <button
+                                      onClick={() => toggleNotifExpanded(n.id)}
+                                      className="text-dark-400 hover:text-dark-300 flex-shrink-0"
+                                    >
+                                      {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                    </button>
+                                  )}
+                                  <span className="text-xs text-dark-500 flex-shrink-0">
+                                    {formatRelativeTime(n.timestamp)}
+                                  </span>
+                                </div>
+                                {isExpanded && hitConds.length > 0 && (
+                                  <div className="mt-1.5 pl-4 flex flex-wrap gap-1">
+                                    {hitConds.map((hc, i) => {
+                                      const unit = hc.metric === 'temperature' ? '°C' : '%'
+                                      return (
+                                        <span
+                                          key={i}
+                                          className={cn(
+                                            'text-xs px-1.5 py-0.5 rounded',
+                                            hc.hit ? 'bg-red-500/10 text-red-400' : 'bg-dark-700 text-dark-500',
+                                          )}
+                                        >
+                                          {getMetricLabel(hc.metric)} {getOpLabel(hc.operator)} {hc.threshold}{unit}
+                                          → {hc.actualValue}{unit} {hc.hit ? '✓' : '✗'}
+                                        </span>
+                                      )
+                                    })}
+                                    <Link to="/notifications" className="text-xs text-primary-400 hover:text-primary-300 inline-flex items-center gap-0.5 ml-1">
+                                      <ExternalLink className="w-3 h-3" />通知
+                                    </Link>
+                                  </div>
                                 )}
-                              />
-                              <span className="text-sm text-white truncate flex-shrink-0">
-                                {n.deviceName}
-                              </span>
-                              <span className="text-xs text-dark-300 truncate flex-1 min-w-0">
-                                {n.message.length > 40
-                                  ? `${n.message.slice(0, 40)}...`
-                                  : n.message}
-                              </span>
-                              <span className="text-xs text-dark-500 flex-shrink-0">
-                                {formatRelativeTime(n.timestamp)}
-                              </span>
-                            </div>
-                          ))
+                              </div>
+                            )
+                          })
                         )}
                       </div>
                     </div>

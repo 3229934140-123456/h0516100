@@ -11,6 +11,9 @@ import type {
   AlertCondition,
   DeviceStatus,
   AlertLogic,
+  HitConditionDetail,
+  SimulationRecord,
+  SimulationRuleResult,
 } from '../types'
 import {
   mockDevices,
@@ -22,7 +25,7 @@ import {
   generateTimeSeriesData,
 } from '../data/mockData'
 
-const STORAGE_KEY = 'iot-monitor-store-v2'
+const STORAGE_KEY = 'iot-monitor-store-v3'
 
 interface TimeSeriesMap {
   [deviceId: string]: {
@@ -40,6 +43,7 @@ interface AppState {
   commands: DeviceCommand[]
   auditLogs: AuditLog[]
   timeSeries: TimeSeriesMap
+  simulationRecords: SimulationRecord[]
   initialized: boolean
 }
 
@@ -56,6 +60,7 @@ type Action =
   | { type: 'RESOLVE_NOTIFICATION'; payload: { id: string; note: string } }
   | { type: 'ADD_AUDIT_LOG'; payload: AuditLog }
   | { type: 'ADD_NOTIFICATION'; payload: AlertNotification }
+  | { type: 'ADD_SIMULATION_RECORD'; payload: SimulationRecord }
   | { type: 'RESET_STORE' }
 
 function toDate(v: Date | string | undefined): Date {
@@ -111,6 +116,10 @@ function hydrateDates(state: AppState): AppState {
         executedAt: c.executedAt ? toDate(c.executedAt) : undefined,
       })),
       auditLogs: state.auditLogs.map((a) => ({ ...a, timestamp: toDate(a.timestamp) })),
+      simulationRecords: (state.simulationRecords || []).map((s) => ({
+        ...s,
+        time: toDate(s.time),
+      })),
       initialized: true,
     }
   } catch (e) {
@@ -135,6 +144,7 @@ function getInitialState(): AppState {
     })),
     auditLogs: mockAuditLogs.map((a) => ({ ...a, timestamp: toDate(a.timestamp) })),
     timeSeries: buildInitialTimeSeries(),
+    simulationRecords: [],
     initialized: true,
   }
 }
@@ -311,22 +321,43 @@ function reducer(state: AppState, action: Action): AppState {
         const appliesToGroup = rule.groupIds.includes(device.groupId)
         const appliesToDevice = rule.deviceIds.includes(deviceId)
         if (!appliesToGroup && !appliesToDevice) return
-        if (!checkRuleConditions(rule, metrics)) return
+
+        const conditions = rule.conditions?.length ? rule.conditions : [rule.condition]
+        const hitDetails: HitConditionDetail[] = conditions
+          .filter((c) => c.type === 'metric' && c.metric && c.operator && c.threshold !== undefined)
+          .map((c) => {
+            const actualValue = metrics[c.metric!] ?? 0
+            let hit = false
+            switch (c.operator!) {
+              case '>': hit = actualValue > c.threshold!; break
+              case '>=': hit = actualValue >= c.threshold!; break
+              case '<': hit = actualValue < c.threshold!; break
+              case '<=': hit = actualValue <= c.threshold!; break
+              case '==': hit = actualValue === c.threshold!; break
+              case '!=': hit = actualValue !== c.threshold!; break
+            }
+            return { metric: c.metric!, operator: c.operator!, threshold: c.threshold!, actualValue, hit }
+          })
+
+        const triggered = rule.conditionLogic === 'all'
+          ? hitDetails.every((h) => h.hit)
+          : hitDetails.some((h) => h.hit)
+
+        if (!triggered) return
 
         triggeredRuleIds.push(rule.id)
 
-        const metricConditions = (rule.conditions?.length ? rule.conditions : [rule.condition])
-          .filter((c) => c.type === 'metric')
-        const triggerDescs = metricConditions.map((c) => {
-          const label = c.metric === 'temperature' ? '温度' : c.metric === 'battery' ? '电量' : '信号'
-          const op = c.operator === '>' ? '超过' : c.operator === '<' ? '低于' : c.operator
-          return `${label} ${op} ${c.threshold}`
-        }).join('，且 ')
-        const actuals = metricConditions.map((c) => {
-          const label = c.metric === 'temperature' ? '温度' : c.metric === 'battery' ? '电量' : '信号'
-          return `${label} ${c.metric ? metrics[c.metric] : '-'}`
-        }).join('，')
-        const hasCritical = metricConditions.some((c) => c.metric === 'temperature' && (c.operator === '>' || c.operator === '>='))
+        const hitCount = hitDetails.filter((h) => h.hit).length
+        const logicLabel = rule.conditionLogic === 'all' ? '且' : '或'
+        const hitDescs = hitDetails.map((h) => {
+          const label = h.metric === 'temperature' ? '温度' : h.metric === 'battery' ? '电量' : '信号'
+          const opLabel = h.operator === '>' ? '超过' : h.operator === '<' ? '低于' : h.operator
+          return h.hit
+            ? `${label} ${opLabel} ${h.threshold}（当前 ${h.actualValue}，命中）`
+            : `${label} ${opLabel} ${h.threshold}（当前 ${h.actualValue}，未命中）`
+        }).join(` ${logicLabel} `)
+
+        const hasCritical = hitDetails.some((h) => h.hit && h.metric === 'temperature' && (h.operator === '>' || h.operator === '>='))
 
         newNotifications.push({
           id: `n_${Date.now()}_${rule.id}_${Math.random().toString(36).slice(2, 6)}`,
@@ -334,11 +365,13 @@ function reducer(state: AppState, action: Action): AppState {
           ruleName: rule.name,
           deviceId,
           deviceName: device.name,
-          message: `触发条件：${triggerDescs}。当前${actuals}`,
+          message: `${hitCount}/${hitDetails.length} 项条件命中：${hitDescs}`,
           level: hasCritical ? 'critical' : 'warning',
           channels: rule.channels,
           read: false,
           resolved: false,
+          hitConditions: hitDetails,
+          conditionLogic: rule.conditionLogic,
           timestamp: now,
         })
       })
@@ -404,6 +437,12 @@ function reducer(state: AppState, action: Action): AppState {
     case 'ADD_NOTIFICATION':
       return { ...state, notifications: [action.payload, ...state.notifications] }
 
+    case 'ADD_SIMULATION_RECORD':
+      return {
+        ...state,
+        simulationRecords: [action.payload, ...(state.simulationRecords || []).slice(0, 49)],
+      }
+
     case 'RESET_STORE':
       localStorage.removeItem(STORAGE_KEY)
       return getInitialState()
@@ -425,6 +464,7 @@ interface StoreContextType {
   markAllNotificationsRead: () => void
   resolveNotification: (id: string, note: string) => void
   resetStore: () => void
+  addSimulationRecord: (record: Omit<SimulationRecord, 'id'>) => void
   getDeviceById: (id: string) => Device | undefined
   getGroupById: (id: string) => DeviceGroup | undefined
   getDevicesByGroup: (groupId: string) => Device[]
@@ -533,6 +573,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   )
   const resetStore = useCallback(() => dispatch({ type: 'RESET_STORE' }), [])
 
+  const addSimulationRecord = useCallback(
+    (record: Omit<SimulationRecord, 'id'>) => {
+      dispatch({
+        type: 'ADD_SIMULATION_RECORD',
+        payload: { ...record, id: `sim_${Date.now()}` } as SimulationRecord,
+      })
+    },
+    [],
+  )
+
   const getDeviceById = useCallback((id: string) => state.devices.find((d) => d.id === id), [state.devices])
   const getGroupById = useCallback((id: string) => state.groups.find((g) => g.id === id), [state.groups])
   const getDevicesByGroup = useCallback(
@@ -596,6 +646,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       markAllNotificationsRead,
       resolveNotification,
       resetStore,
+      addSimulationRecord,
       getDeviceById,
       getGroupById,
       getDevicesByGroup,
@@ -616,6 +667,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       markAllNotificationsRead,
       resolveNotification,
       resetStore,
+      addSimulationRecord,
       getDeviceById,
       getGroupById,
       getDevicesByGroup,
