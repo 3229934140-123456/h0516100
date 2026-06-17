@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useEffect, useCallback } from 'react'
+import React, { createContext, useContext, useReducer, useEffect, useCallback, useMemo } from 'react'
 import type {
   Device,
   DeviceGroup,
@@ -10,6 +10,7 @@ import type {
   DeviceMetrics,
   AlertCondition,
   DeviceStatus,
+  AlertLogic,
 } from '../types'
 import {
   mockDevices,
@@ -21,7 +22,7 @@ import {
   generateTimeSeriesData,
 } from '../data/mockData'
 
-const STORAGE_KEY = 'iot-monitor-store'
+const STORAGE_KEY = 'iot-monitor-store-v2'
 
 interface TimeSeriesMap {
   [deviceId: string]: {
@@ -44,17 +45,23 @@ interface AppState {
 
 type Action =
   | { type: 'INIT'; payload: AppState }
+  | { type: 'HYDRATE_DATES' }
   | { type: 'ADD_ALERT_RULE'; payload: AlertRule }
   | { type: 'TOGGLE_ALERT_RULE'; payload: string }
   | { type: 'SEND_COMMAND'; payload: DeviceCommand }
-  | { type: 'UPDATE_COMMAND'; payload: { id: string; status: DeviceCommand['status']; result?: string; error?: string } }
   | { type: 'ADD_GROUP'; payload: DeviceGroup }
   | { type: 'REPORT_DEVICE_DATA'; payload: { deviceId: string; metrics: DeviceMetrics; protocol: 'MQTT' | 'HTTP' } }
   | { type: 'MARK_NOTIFICATION_READ'; payload: string }
   | { type: 'MARK_ALL_NOTIFICATIONS_READ' }
-  | { type: 'RESOLVE_NOTIFICATION'; payload: string }
+  | { type: 'RESOLVE_NOTIFICATION'; payload: { id: string; note: string } }
   | { type: 'ADD_AUDIT_LOG'; payload: AuditLog }
   | { type: 'ADD_NOTIFICATION'; payload: AlertNotification }
+  | { type: 'RESET_STORE' }
+
+function toDate(v: Date | string | undefined): Date {
+  if (!v) return new Date()
+  return v instanceof Date ? v : new Date(v)
+}
 
 function buildInitialTimeSeries(): TimeSeriesMap {
   const ts: TimeSeriesMap = {}
@@ -68,46 +75,97 @@ function buildInitialTimeSeries(): TimeSeriesMap {
   return ts
 }
 
+function enrichMockRules(): AlertRule[] {
+  return mockAlertRules.map((r) => ({
+    ...r,
+    conditions: [r.condition],
+    conditionLogic: 'any' as AlertLogic,
+  }))
+}
+
+function hydrateDates(state: AppState): AppState {
+  try {
+    return {
+      ...state,
+      devices: state.devices.map((d) => ({
+        ...d,
+        lastReport: toDate(d.lastReport),
+        createdAt: toDate(d.createdAt),
+      })),
+      groups: state.groups.map((g) => ({ ...g, createdAt: toDate(g.createdAt) })),
+      alertRules: state.alertRules.map((r) => ({
+        ...r,
+        createdAt: toDate(r.createdAt),
+        lastTriggered: r.lastTriggered ? toDate(r.lastTriggered) : undefined,
+        conditions: r.conditions?.length ? r.conditions : [r.condition],
+        conditionLogic: r.conditionLogic || 'any',
+      })),
+      notifications: state.notifications.map((n) => ({
+        ...n,
+        timestamp: toDate(n.timestamp),
+        resolvedAt: n.resolvedAt ? toDate(n.resolvedAt) : undefined,
+      })),
+      commands: state.commands.map((c) => ({
+        ...c,
+        createdAt: toDate(c.createdAt),
+        executedAt: c.executedAt ? toDate(c.executedAt) : undefined,
+      })),
+      auditLogs: state.auditLogs.map((a) => ({ ...a, timestamp: toDate(a.timestamp) })),
+      initialized: true,
+    }
+  } catch (e) {
+    return state
+  }
+}
+
 function getInitialState(): AppState {
   return {
-    devices: mockDevices.map((d) => ({ ...d })),
-    groups: mockGroups.map((g) => ({ ...g })),
-    alertRules: mockAlertRules.map((r) => ({ ...r })),
-    notifications: mockNotifications.map((n) => ({ ...n })),
-    commands: mockCommands.map((c) => ({ ...c })),
-    auditLogs: mockAuditLogs.map((a) => ({ ...a })),
+    devices: mockDevices.map((d) => ({ ...d, lastReport: toDate(d.lastReport), createdAt: toDate(d.createdAt) })),
+    groups: mockGroups.map((g) => ({ ...g, createdAt: toDate(g.createdAt) })),
+    alertRules: enrichMockRules().map((r) => ({
+      ...r,
+      createdAt: toDate(r.createdAt),
+      lastTriggered: r.lastTriggered ? toDate(r.lastTriggered) : undefined,
+    })),
+    notifications: mockNotifications.map((n) => ({ ...n, timestamp: toDate(n.timestamp) })),
+    commands: mockCommands.map((c) => ({
+      ...c,
+      createdAt: toDate(c.createdAt),
+      executedAt: c.executedAt ? toDate(c.executedAt) : undefined,
+    })),
+    auditLogs: mockAuditLogs.map((a) => ({ ...a, timestamp: toDate(a.timestamp) })),
     timeSeries: buildInitialTimeSeries(),
     initialized: true,
   }
 }
 
-function checkAlertCondition(
+function checkSingleCondition(
   condition: AlertCondition,
   metrics: DeviceMetrics,
 ): boolean {
   if (condition.type === 'offline') return false
   if (!condition.metric || condition.operator === undefined || condition.threshold === undefined)
     return false
-
   const value = metrics[condition.metric]
   if (typeof value !== 'number') return false
-
   switch (condition.operator) {
-    case '>':
-      return value > condition.threshold
-    case '>=':
-      return value >= condition.threshold
-    case '<':
-      return value < condition.threshold
-    case '<=':
-      return value <= condition.threshold
-    case '==':
-      return value === condition.threshold
-    case '!=':
-      return value !== condition.threshold
-    default:
-      return false
+    case '>': return value > condition.threshold
+    case '>=': return value >= condition.threshold
+    case '<': return value < condition.threshold
+    case '<=': return value <= condition.threshold
+    case '==': return value === condition.threshold
+    case '!=': return value !== condition.threshold
+    default: return false
   }
+}
+
+function checkRuleConditions(rule: AlertRule, metrics: DeviceMetrics): boolean {
+  const conditions = rule.conditions?.length ? rule.conditions : [rule.condition]
+  if (conditions.length === 0) return false
+  const results = conditions.map((c) => checkSingleCondition(c, metrics))
+  return rule.conditionLogic === 'all'
+    ? results.every(Boolean)
+    : results.some(Boolean)
 }
 
 function formatTsTime(date: Date): string {
@@ -118,7 +176,10 @@ function formatTsTime(date: Date): string {
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'INIT':
-      return { ...action.payload, initialized: true }
+      return hydrateDates(action.payload)
+
+    case 'HYDRATE_DATES':
+      return hydrateDates(state)
 
     case 'ADD_ALERT_RULE':
       return {
@@ -140,39 +201,38 @@ function reducer(state: AppState, action: Action): AppState {
         ],
       }
 
-    case 'TOGGLE_ALERT_RULE':
+    case 'TOGGLE_ALERT_RULE': {
+      const target = state.alertRules.find((r) => r.id === action.payload)
+      const enable = !target?.enabled
       return {
         ...state,
         alertRules: state.alertRules.map((r) =>
-          r.id === action.payload ? { ...r, enabled: !r.enabled } : r,
+          r.id === action.payload ? { ...r, enabled: enable } : r,
         ),
         auditLogs: [
           {
             id: `a_${Date.now()}`,
-            action: state.alertRules.find((r) => r.id === action.payload)?.enabled
-              ? '禁用告警规则'
-              : '启用告警规则',
+            action: enable ? '启用告警规则' : '禁用告警规则',
             module: '告警管理',
             targetId: action.payload,
-            targetName: state.alertRules.find((r) => r.id === action.payload)?.name,
+            targetName: target?.name,
             operator: '管理员',
-            detail: `${state.alertRules.find((r) => r.id === action.payload)?.enabled ? '禁用' : '启用'}告警规则`,
+            detail: `${enable ? '启用' : '禁用'}告警规则：${target?.name}`,
             ip: '192.168.1.101',
             timestamp: new Date(),
           },
           ...state.auditLogs,
         ],
       }
+    }
 
     case 'SEND_COMMAND': {
       const newCmd = action.payload
-      const simulatedStatus = newCmd.status === 'pending' ? 'success' : newCmd.status
-      const updatedCmd = {
+      const updatedCmd: DeviceCommand = {
         ...newCmd,
-        status: simulatedStatus as DeviceCommand['status'],
+        status: 'success',
         executedAt: new Date(),
-        result: simulatedStatus === 'success' ? `指令"${newCmd.command}"执行成功` : undefined,
-        error: simulatedStatus === 'failed' ? '指令执行失败' : undefined,
+        result: `指令"${newCmd.command}"执行成功`,
       }
       return {
         ...state,
@@ -215,12 +275,13 @@ function reducer(state: AppState, action: Action): AppState {
       }
 
     case 'REPORT_DEVICE_DATA': {
-      const { deviceId, metrics, protocol } = action.payload
+      const { deviceId, metrics } = action.payload
       const device = state.devices.find((d) => d.id === deviceId)
       if (!device) return state
 
       const now = new Date()
       const tsPoint = formatTsTime(now)
+      const tsMs = now.getTime()
 
       const newStatus: DeviceStatus = (() => {
         if (metrics.temperature > 80 || metrics.battery < 20 || metrics.signal < 30)
@@ -230,38 +291,16 @@ function reducer(state: AppState, action: Action): AppState {
 
       const updatedDevices = state.devices.map((d) =>
         d.id === deviceId
-          ? {
-              ...d,
-              metrics: { ...d.metrics, ...metrics },
-              lastReport: now,
-              status: newStatus,
-              runState: newStatus === 'warning' ? 'running' : d.runState,
-            }
+          ? { ...d, metrics: { ...d.metrics, ...metrics }, lastReport: now, status: newStatus }
           : d,
       )
 
       const updatedTs = { ...state.timeSeries }
-      if (updatedTs[deviceId]) {
-        updatedTs[deviceId] = {
-          temperature: [
-            ...updatedTs[deviceId].temperature.slice(-143),
-            { time: tsPoint, value: metrics.temperature },
-          ],
-          battery: [
-            ...updatedTs[deviceId].battery.slice(-143),
-            { time: tsPoint, value: metrics.battery },
-          ],
-          signal: [
-            ...updatedTs[deviceId].signal.slice(-143),
-            { time: tsPoint, value: metrics.signal },
-          ],
-        }
-      } else {
-        updatedTs[deviceId] = {
-          temperature: [{ time: tsPoint, value: metrics.temperature }],
-          battery: [{ time: tsPoint, value: metrics.battery }],
-          signal: [{ time: tsPoint, value: metrics.signal }],
-        }
+      const prevTs = updatedTs[deviceId] || { temperature: [], battery: [], signal: [] }
+      updatedTs[deviceId] = {
+        temperature: [...prevTs.temperature.slice(-287), { time: tsPoint, timestamp: tsMs, value: metrics.temperature }],
+        battery: [...prevTs.battery.slice(-287), { time: tsPoint, timestamp: tsMs, value: metrics.battery }],
+        signal: [...prevTs.signal.slice(-287), { time: tsPoint, timestamp: tsMs, value: metrics.signal }],
       }
 
       const newNotifications: AlertNotification[] = []
@@ -269,48 +308,43 @@ function reducer(state: AppState, action: Action): AppState {
 
       state.alertRules.forEach((rule) => {
         if (!rule.enabled) return
-        if (rule.condition.type === 'offline') return
-
         const appliesToGroup = rule.groupIds.includes(device.groupId)
         const appliesToDevice = rule.deviceIds.includes(deviceId)
         if (!appliesToGroup && !appliesToDevice) return
+        if (!checkRuleConditions(rule, metrics)) return
 
-        if (checkAlertCondition(rule.condition, metrics)) {
-          triggeredRuleIds.push(rule.id)
-          const metricLabel =
-            rule.condition.metric === 'temperature'
-              ? '温度'
-              : rule.condition.metric === 'battery'
-              ? '电量'
-              : rule.condition.metric === 'signal'
-              ? '信号'
-              : rule.condition.metric
-          const operatorLabel =
-            rule.condition.operator === '>'
-              ? '超过'
-              : rule.condition.operator === '<'
-              ? '低于'
-              : rule.condition.operator
-          const actualValue = rule.condition.metric ? metrics[rule.condition.metric] : 0
+        triggeredRuleIds.push(rule.id)
 
-          newNotifications.push({
-            id: `n_${Date.now()}_${rule.id}`,
-            ruleId: rule.id,
-            ruleName: rule.name,
-            deviceId,
-            deviceName: device.name,
-            message: `设备${metricLabel}${operatorLabel}阈值 ${rule.condition.threshold}，当前值 ${actualValue}`,
-            level: rule.condition.metric === 'temperature' && (rule.condition.operator === '>' || rule.condition.operator === '>=') ? 'critical' : 'warning',
-            channels: rule.channels,
-            read: false,
-            resolved: false,
-            timestamp: new Date(),
-          })
-        }
+        const metricConditions = (rule.conditions?.length ? rule.conditions : [rule.condition])
+          .filter((c) => c.type === 'metric')
+        const triggerDescs = metricConditions.map((c) => {
+          const label = c.metric === 'temperature' ? '温度' : c.metric === 'battery' ? '电量' : '信号'
+          const op = c.operator === '>' ? '超过' : c.operator === '<' ? '低于' : c.operator
+          return `${label} ${op} ${c.threshold}`
+        }).join('，且 ')
+        const actuals = metricConditions.map((c) => {
+          const label = c.metric === 'temperature' ? '温度' : c.metric === 'battery' ? '电量' : '信号'
+          return `${label} ${c.metric ? metrics[c.metric] : '-'}`
+        }).join('，')
+        const hasCritical = metricConditions.some((c) => c.metric === 'temperature' && (c.operator === '>' || c.operator === '>='))
+
+        newNotifications.push({
+          id: `n_${Date.now()}_${rule.id}_${Math.random().toString(36).slice(2, 6)}`,
+          ruleId: rule.id,
+          ruleName: rule.name,
+          deviceId,
+          deviceName: device.name,
+          message: `触发条件：${triggerDescs}。当前${actuals}`,
+          level: hasCritical ? 'critical' : 'warning',
+          channels: rule.channels,
+          read: false,
+          resolved: false,
+          timestamp: now,
+        })
       })
 
       const updatedRules = state.alertRules.map((r) =>
-        triggeredRuleIds.includes(r.id) ? { ...r, lastTriggered: new Date() } : r,
+        triggeredRuleIds.includes(r.id) ? { ...r, lastTriggered: now } : r,
       )
 
       return {
@@ -336,25 +370,43 @@ function reducer(state: AppState, action: Action): AppState {
         notifications: state.notifications.map((n) => ({ ...n, read: true })),
       }
 
-    case 'RESOLVE_NOTIFICATION':
+    case 'RESOLVE_NOTIFICATION': {
+      const target = state.notifications.find((n) => n.id === action.payload.id)
       return {
         ...state,
         notifications: state.notifications.map((n) =>
-          n.id === action.payload ? { ...n, resolved: true, read: true } : n,
+          n.id === action.payload.id
+            ? { ...n, resolved: true, read: true, resolvedBy: '管理员', resolvedAt: new Date(), resolveNote: action.payload.note }
+            : n,
         ),
+        auditLogs: target
+          ? [
+              {
+                id: `a_${Date.now()}`,
+                action: '处理告警',
+                module: '通知管理',
+                targetId: target.id,
+                targetName: target.ruleName,
+                operator: '管理员',
+                detail: `处理告警：${target.ruleName}（${target.deviceName}），处理备注：${action.payload.note || '无'}`,
+                ip: '192.168.1.101',
+                timestamp: new Date(),
+              },
+              ...state.auditLogs,
+            ]
+          : state.auditLogs,
       }
+    }
 
     case 'ADD_AUDIT_LOG':
-      return {
-        ...state,
-        auditLogs: [action.payload, ...state.auditLogs],
-      }
+      return { ...state, auditLogs: [action.payload, ...state.auditLogs] }
 
     case 'ADD_NOTIFICATION':
-      return {
-        ...state,
-        notifications: [action.payload, ...state.notifications],
-      }
+      return { ...state, notifications: [action.payload, ...state.notifications] }
+
+    case 'RESET_STORE':
+      localStorage.removeItem(STORAGE_KEY)
+      return getInitialState()
 
     default:
       return state
@@ -371,44 +423,49 @@ interface StoreContextType {
   reportDeviceData: (deviceId: string, metrics: DeviceMetrics, protocol: 'MQTT' | 'HTTP') => void
   markNotificationRead: (id: string) => void
   markAllNotificationsRead: () => void
-  resolveNotification: (id: string) => void
+  resolveNotification: (id: string, note: string) => void
+  resetStore: () => void
   getDeviceById: (id: string) => Device | undefined
   getGroupById: (id: string) => DeviceGroup | undefined
   getDevicesByGroup: (groupId: string) => Device[]
   getCommandsByDevice: (deviceId: string) => DeviceCommand[]
   getDeviceTimeSeries: (deviceId: string) => { temperature: TimeSeriesData[]; battery: TimeSeriesData[]; signal: TimeSeriesData[] }
+  getAffectedDevicesForRule: (rule: AlertRule) => Device[]
+  getTriggeredNotificationsForRule: (ruleId: string) => AlertNotification[]
+  filterTimeSeriesByRange: (data: TimeSeriesData[], rangeHours: number) => TimeSeriesData[]
 }
 
 const StoreContext = createContext<StoreContextType | null>(null)
 
 function serializeState(state: AppState): string {
-  return JSON.stringify(state, (key, value) => {
+  return JSON.stringify(state, (_, value) => {
     if (value instanceof Date) return { __type: 'Date', value: value.toISOString() }
     return value
   })
 }
 
 function deserializeState(json: string): AppState {
-  return JSON.parse(json, (key, value) => {
+  const raw = JSON.parse(json, (_, value) => {
     if (value && value.__type === 'Date') return new Date(value.value)
     return value
   })
+  return raw as AppState
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, getInitialState())
+  const [state, dispatch] = useReducer(reducer, undefined, getInitialState)
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
       if (saved) {
         const parsed = deserializeState(saved)
-        if (parsed && parsed.devices) {
+        if (parsed && parsed.devices && parsed.initialized) {
           dispatch({ type: 'INIT', payload: parsed })
         }
       }
-    } catch {
-      // ignore
+    } catch (e) {
+      console.warn('Failed to load store:', e)
     }
   }, [])
 
@@ -416,131 +473,159 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (state.initialized) {
       try {
         localStorage.setItem(STORAGE_KEY, serializeState(state))
-      } catch {
-        // ignore
+      } catch (e) {
+        console.warn('Failed to save store:', e)
       }
     }
   }, [state])
 
   const addAlertRule = useCallback(
     (rule: Omit<AlertRule, 'id' | 'createdAt'>) => {
+      const conditions = rule.conditions?.length ? rule.conditions : [rule.condition]
       dispatch({
         type: 'ADD_ALERT_RULE',
-        payload: { ...rule, id: `r_${Date.now()}`, createdAt: new Date() } as AlertRule,
+        payload: {
+          ...rule,
+          conditions,
+          conditionLogic: rule.conditionLogic || 'any',
+          id: `r_${Date.now()}`,
+          createdAt: new Date(),
+        } as AlertRule,
       })
     },
-    [dispatch],
+    [],
   )
 
-  const toggleAlertRule = useCallback(
-    (id: string) => {
-      dispatch({ type: 'TOGGLE_ALERT_RULE', payload: id })
-    },
-    [dispatch],
-  )
+  const toggleAlertRule = useCallback((id: string) => dispatch({ type: 'TOGGLE_ALERT_RULE', payload: id }), [])
 
   const sendCommand = useCallback(
     (cmd: Omit<DeviceCommand, 'id' | 'createdAt' | 'status' | 'executedAt' | 'result' | 'error'>) => {
       dispatch({
         type: 'SEND_COMMAND',
-        payload: {
-          ...cmd,
-          id: `c_${Date.now()}`,
-          status: 'pending',
-          createdAt: new Date(),
-        } as DeviceCommand,
+        payload: { ...cmd, id: `c_${Date.now()}`, status: 'pending', createdAt: new Date() } as DeviceCommand,
       })
     },
-    [dispatch],
+    [],
   )
 
   const addGroup = useCallback(
     (group: Omit<DeviceGroup, 'id' | 'createdAt' | 'deviceCount'>) => {
       dispatch({
         type: 'ADD_GROUP',
-        payload: {
-          ...group,
-          id: `g_${Date.now()}`,
-          deviceCount: 0,
-          createdAt: new Date(),
-        } as DeviceGroup,
+        payload: { ...group, id: `g_${Date.now()}`, deviceCount: 0, createdAt: new Date() } as DeviceGroup,
       })
     },
-    [dispatch],
+    [],
   )
 
   const reportDeviceData = useCallback(
     (deviceId: string, metrics: DeviceMetrics, protocol: 'MQTT' | 'HTTP') => {
       dispatch({ type: 'REPORT_DEVICE_DATA', payload: { deviceId, metrics, protocol } })
     },
-    [dispatch],
+    [],
   )
 
-  const markNotificationRead = useCallback(
-    (id: string) => {
-      dispatch({ type: 'MARK_NOTIFICATION_READ', payload: id })
-    },
-    [dispatch],
-  )
-
-  const markAllNotificationsRead = useCallback(() => {
-    dispatch({ type: 'MARK_ALL_NOTIFICATIONS_READ' })
-  }, [dispatch])
-
+  const markNotificationRead = useCallback((id: string) => dispatch({ type: 'MARK_NOTIFICATION_READ', payload: id }), [])
+  const markAllNotificationsRead = useCallback(() => dispatch({ type: 'MARK_ALL_NOTIFICATIONS_READ' }), [])
   const resolveNotification = useCallback(
-    (id: string) => {
-      dispatch({ type: 'RESOLVE_NOTIFICATION', payload: id })
-    },
-    [dispatch],
+    (id: string, note: string) => dispatch({ type: 'RESOLVE_NOTIFICATION', payload: { id, note } }),
+    [],
   )
+  const resetStore = useCallback(() => dispatch({ type: 'RESET_STORE' }), [])
 
-  const getDeviceById = useCallback(
-    (id: string) => state.devices.find((d) => d.id === id),
-    [state.devices],
-  )
-
-  const getGroupById = useCallback(
-    (id: string) => state.groups.find((g) => g.id === id),
-    [state.groups],
-  )
-
+  const getDeviceById = useCallback((id: string) => state.devices.find((d) => d.id === id), [state.devices])
+  const getGroupById = useCallback((id: string) => state.groups.find((g) => g.id === id), [state.groups])
   const getDevicesByGroup = useCallback(
     (groupId: string) => state.devices.filter((d) => d.groupId === groupId),
     [state.devices],
   )
-
   const getCommandsByDevice = useCallback(
     (deviceId: string) => state.commands.filter((c) => c.deviceId === deviceId),
     [state.commands],
   )
-
   const getDeviceTimeSeries = useCallback(
-    (deviceId: string) =>
-      state.timeSeries[deviceId] || {
+    (deviceId: string) => {
+      if (state.timeSeries[deviceId]) return state.timeSeries[deviceId]
+      const fallback = {
         temperature: generateTimeSeriesData(24, 50, 15),
         battery: generateTimeSeriesData(24, 80, 10),
         signal: generateTimeSeriesData(24, 90, 15),
-      },
+      }
+      return fallback
+    },
     [state.timeSeries],
   )
 
-  const value: StoreContextType = {
-    state,
-    dispatch,
-    addAlertRule,
-    toggleAlertRule,
-    sendCommand,
-    addGroup,
-    reportDeviceData,
-    markNotificationRead,
-    markAllNotificationsRead,
-    resolveNotification,
-    getDeviceById,
-    getGroupById,
-    getDevicesByGroup,
-    getCommandsByDevice,
-    getDeviceTimeSeries,
-  }
+  const getAffectedDevicesForRule = useCallback(
+    (rule: AlertRule) => {
+      return state.devices.filter(
+        (d) => rule.groupIds.includes(d.groupId) || rule.deviceIds.includes(d.id),
+      )
+    },
+    [state.devices],
+  )
+
+  const getTriggeredNotificationsForRule = useCallback(
+    (ruleId: string) => state.notifications.filter((n) => n.ruleId === ruleId).slice(0, 10),
+    [state.notifications],
+  )
+
+  const filterTimeSeriesByRange = useCallback((data: TimeSeriesData[], rangeHours: number) => {
+    if (!data.length) return data
+    if (rangeHours <= 0) return data
+    const cutoff = Date.now() - rangeHours * 3600 * 1000
+    const withTs = data.filter((d) => d.timestamp !== undefined)
+    if (withTs.length > 0) {
+      return withTs.filter((d) => (d.timestamp || 0) >= cutoff)
+    }
+    const pointsPerHour = 6
+    const take = Math.min(data.length, rangeHours * pointsPerHour + 1)
+    return data.slice(-take)
+  }, [])
+
+  const value = useMemo<StoreContextType>(
+    () => ({
+      state,
+      dispatch,
+      addAlertRule,
+      toggleAlertRule,
+      sendCommand,
+      addGroup,
+      reportDeviceData,
+      markNotificationRead,
+      markAllNotificationsRead,
+      resolveNotification,
+      resetStore,
+      getDeviceById,
+      getGroupById,
+      getDevicesByGroup,
+      getCommandsByDevice,
+      getDeviceTimeSeries,
+      getAffectedDevicesForRule,
+      getTriggeredNotificationsForRule,
+      filterTimeSeriesByRange,
+    }),
+    [
+      state,
+      addAlertRule,
+      toggleAlertRule,
+      sendCommand,
+      addGroup,
+      reportDeviceData,
+      markNotificationRead,
+      markAllNotificationsRead,
+      resolveNotification,
+      resetStore,
+      getDeviceById,
+      getGroupById,
+      getDevicesByGroup,
+      getCommandsByDevice,
+      getDeviceTimeSeries,
+      getAffectedDevicesForRule,
+      getTriggeredNotificationsForRule,
+      filterTimeSeriesByRange,
+    ],
+  )
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }

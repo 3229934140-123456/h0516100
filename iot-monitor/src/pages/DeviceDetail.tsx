@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -24,14 +24,17 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Legend,
 } from 'recharts'
 import Card from '../components/ui/Card'
 import StatusBadge from '../components/ui/StatusBadge'
 import Button from '../components/ui/Button'
 import { useStore } from '../store'
 import { formatDateTime, cn } from '../utils'
+import type { TimeSeriesData } from '../types'
 
-type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d'
+type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d' | 'custom'
+type MetricKey = 'temperature' | 'battery' | 'signal'
 
 const commandOptions = [
   { value: '重启设备', label: '重启设备' },
@@ -41,32 +44,132 @@ const commandOptions = [
   { value: '恢复出厂设置', label: '恢复出厂设置' },
 ]
 
+const metricColors: Record<MetricKey, string> = {
+  temperature: '#f97316',
+  battery: '#22c55e',
+  signal: '#3b82f6',
+}
+
+const metricLabels: Record<MetricKey, string> = {
+  temperature: '温度',
+  battery: '电量',
+  signal: '信号',
+}
+
+const timeRangeToHours: Record<Exclude<TimeRange, 'custom'>, number> = {
+  '1h': 1,
+  '6h': 6,
+  '24h': 24,
+  '7d': 24 * 7,
+  '30d': 24 * 30,
+}
+
 export default function DeviceDetail() {
+  const {
+    getDeviceById,
+    getGroupById,
+    getCommandsByDevice,
+    getDeviceTimeSeries,
+    filterTimeSeriesByRange,
+    sendCommand,
+  } = useStore()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const store = useStore()
 
   const [timeRange, setTimeRange] = useState<TimeRange>('24h')
+  const [customStart, setCustomStart] = useState<string>('')
+  const [customEnd, setCustomEnd] = useState<string>('')
+  const [selectedMetrics, setSelectedMetrics] = useState<Record<MetricKey, boolean>>({
+    temperature: true,
+    battery: true,
+    signal: true,
+  })
   const [showCommandModal, setShowCommandModal] = useState(false)
   const [selectedCommand, setSelectedCommand] = useState('')
   const [commandParams, setCommandParams] = useState('')
 
-  const device = id ? store.getDeviceById(id) : undefined
-  const group = device ? store.getGroupById(device.groupId) : undefined
-  const deviceCommands = id ? store.getCommandsByDevice(id) : []
-  const tsData = id ? store.getDeviceTimeSeries(id) : null
+  const device = id ? getDeviceById(id) : undefined
+  const group = device ? getGroupById(device.groupId) : undefined
+  const deviceCommands = id ? getCommandsByDevice(id) : []
+  const rawTs = id ? getDeviceTimeSeries(id) : null
+
+  const toggleMetric = (key: MetricKey) => {
+    setSelectedMetrics((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const chartData = useMemo(() => {
+    if (!rawTs || !device) return []
+
+    const filteredTemp =
+      timeRange !== 'custom'
+        ? filterTimeSeriesByRange(rawTs.temperature, timeRangeToHours[timeRange])
+        : filterTimeSeriesCustom(rawTs.temperature, customStart, customEnd)
+    const filteredBattery =
+      timeRange !== 'custom'
+        ? filterTimeSeriesByRange(rawTs.battery, timeRangeToHours[timeRange])
+        : filterTimeSeriesCustom(rawTs.battery, customStart, customEnd)
+    const filteredSignal =
+      timeRange !== 'custom'
+        ? filterTimeSeriesByRange(rawTs.signal, timeRangeToHours[timeRange])
+        : filterTimeSeriesCustom(rawTs.signal, customStart, customEnd)
+
+    const len = Math.max(filteredTemp.length, filteredBattery.length, filteredSignal.length)
+    if (len === 0) return []
+
+    const result: Array<{
+      time: string
+      timestamp?: number
+      temperature?: number
+      battery?: number
+      signal?: number
+    }> = []
+
+    for (let i = 0; i < len; i++) {
+      const t = filteredTemp[i]
+      const b = filteredBattery[i]
+      const s = filteredSignal[i]
+      const timePoint = t?.time || b?.time || s?.time || ''
+      const tsPoint = t?.timestamp ?? b?.timestamp ?? s?.timestamp
+      result.push({
+        time: timePoint,
+        timestamp: tsPoint,
+        temperature: t?.value,
+        battery: b?.value,
+        signal: s?.value,
+      })
+    }
+
+    if (result.length > 0) {
+      const last = { ...result[result.length - 1] }
+      if (selectedMetrics.temperature && device.metrics.temperature !== undefined) {
+        last.temperature = device.metrics.temperature
+      }
+      if (selectedMetrics.battery && device.metrics.battery !== undefined) {
+        last.battery = device.metrics.battery
+      }
+      if (selectedMetrics.signal && device.metrics.signal !== undefined) {
+        last.signal = device.metrics.signal
+      }
+      result[result.length - 1] = last
+    }
+
+    return result
+  }, [rawTs, device, timeRange, customStart, customEnd, filterTimeSeriesByRange, selectedMetrics])
 
   if (!device) {
     return (
       <div className="text-center py-20">
         <p className="text-dark-400 mb-4">设备不存在</p>
-        <Button onClick={() => navigate('/devices')}>返回设备列表</Button>
+        <Button onClick={() => navigate('/devices')}>
+          <ArrowLeft className="w-4 h-4 mr-2" />
+          返回设备列表
+        </Button>
       </div>
     )
   }
 
   const handleSendCommand = () => {
-    if (!selectedCommand || !id) return
+    if (!selectedCommand || !id || !device) return
 
     let params: Record<string, any> | undefined
     if (commandParams.trim()) {
@@ -77,9 +180,9 @@ export default function DeviceDetail() {
       }
     }
 
-    store.sendCommand({
-      deviceId: id,
-      deviceName: device.name,
+    sendCommand({
+      deviceId: id!,
+      deviceName: device!.name,
       command: selectedCommand,
       params,
       operator: '管理员',
@@ -96,7 +199,10 @@ export default function DeviceDetail() {
     { key: '24h', label: '24小时' },
     { key: '7d', label: '7天' },
     { key: '30d', label: '30天' },
+    { key: 'custom', label: '自定义' },
   ]
+
+  const metricList: MetricKey[] = ['temperature', 'battery', 'signal']
 
   return (
     <div className="space-y-6">
@@ -171,37 +277,142 @@ export default function DeviceDetail() {
             title="历史数据趋势"
             subtitle="查看设备关键指标的历史变化"
             action={
-              <div className="flex items-center gap-2">
-                <div className="flex bg-dark-700 rounded-lg p-1">
-                  {timeRanges.map((r) => (
-                    <button
-                      key={r.key}
-                      onClick={() => setTimeRange(r.key)}
-                      className={cn(
-                        'px-3 py-1.5 text-sm rounded-md transition-colors',
-                        timeRange === r.key
-                          ? 'bg-primary-600 text-white'
-                          : 'text-dark-300 hover:text-white',
-                      )}
-                    >
-                      {r.label}
-                    </button>
-                  ))}
+              <div className="flex flex-col items-end gap-3">
+                <div className="flex items-center gap-2">
+                  <div className="flex bg-dark-700 rounded-lg p-1">
+                    {timeRanges.map((r) => (
+                      <button
+                        key={r.key}
+                        onClick={() => setTimeRange(r.key)}
+                        className={cn(
+                          'px-3 py-1.5 text-sm rounded-md transition-colors',
+                          timeRange === r.key
+                            ? 'bg-primary-600 text-white'
+                            : 'text-dark-300 hover:text-white',
+                        )}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                  <Button variant="secondary" size="sm">
+                    <Download className="w-4 h-4" />
+                    导出
+                  </Button>
                 </div>
-                <Button variant="secondary" size="sm">
-                  <Download className="w-4 h-4" />
-                  导出
-                </Button>
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-3">
+                    {metricList.map((m) => (
+                      <label
+                        key={m}
+                        className="flex items-center gap-1.5 text-sm text-dark-300 cursor-pointer select-none"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedMetrics[m]}
+                          onChange={() => toggleMetric(m)}
+                          className="w-3.5 h-3.5 rounded border-dark-600 bg-dark-700 text-primary-600 focus:ring-primary-500 focus:ring-offset-0"
+                        />
+                        <span
+                          className="w-3 h-3 rounded-full"
+                          style={{ backgroundColor: metricColors[m] }}
+                        />
+                        {metricLabels[m]}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                {timeRange === 'custom' && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="datetime-local"
+                      value={customStart}
+                      onChange={(e) => setCustomStart(e.target.value)}
+                      className="h-8 bg-dark-700 border border-dark-600 rounded-lg px-3 text-xs text-white focus:outline-none focus:border-primary-500 transition-colors"
+                    />
+                    <span className="text-dark-400 text-sm">至</span>
+                    <input
+                      type="datetime-local"
+                      value={customEnd}
+                      onChange={(e) => setCustomEnd(e.target.value)}
+                      className="h-8 bg-dark-700 border border-dark-600 rounded-lg px-3 text-xs text-white focus:outline-none focus:border-primary-500 transition-colors"
+                    />
+                  </div>
+                )}
               </div>
             }
           >
-            <div className="space-y-8">
-              {tsData && (
-                <>
-                  <ChartSection title="温度趋势" unit="°C" data={tsData.temperature} color="#f97316" />
-                  <ChartSection title="电量趋势" unit="%" data={tsData.battery} color="#22c55e" />
-                  <ChartSection title="信号强度" unit="%" data={tsData.signal} color="#3b82f6" />
-                </>
+            <div>
+              {chartData.length > 0 ? (
+                <div className="h-96">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                      <XAxis
+                        dataKey="time"
+                        stroke="#64748b"
+                        fontSize={11}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        stroke="#64748b"
+                        fontSize={11}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#1e293b',
+                          border: '1px solid #334155',
+                          borderRadius: '8px',
+                        }}
+                        labelStyle={{ color: '#e2e8f0' }}
+                      />
+                      <Legend
+                        wrapperStyle={{ color: '#94a3b8' }}
+                        formatter={(value: string) => metricLabels[value as MetricKey] || value}
+                      />
+                      {selectedMetrics.temperature && (
+                        <Line
+                          type="monotone"
+                          dataKey="temperature"
+                          stroke={metricColors.temperature}
+                          strokeWidth={2}
+                          dot={false}
+                          activeDot={{ r: 4 }}
+                          name="temperature"
+                        />
+                      )}
+                      {selectedMetrics.battery && (
+                        <Line
+                          type="monotone"
+                          dataKey="battery"
+                          stroke={metricColors.battery}
+                          strokeWidth={2}
+                          dot={false}
+                          activeDot={{ r: 4 }}
+                          name="battery"
+                        />
+                      )}
+                      {selectedMetrics.signal && (
+                        <Line
+                          type="monotone"
+                          dataKey="signal"
+                          stroke={metricColors.signal}
+                          strokeWidth={2}
+                          dot={false}
+                          activeDot={{ r: 4 }}
+                          name="signal"
+                        />
+                      )}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <div className="h-96 flex items-center justify-center">
+                  <p className="text-dark-400">暂无历史数据</p>
+                </div>
               )}
             </div>
           </Card>
@@ -270,9 +481,7 @@ export default function DeviceDetail() {
           <div className="bg-dark-800 border border-dark-700 rounded-xl w-full max-w-md animate-fade-in">
             <div className="px-6 py-4 border-b border-dark-700">
               <h3 className="text-lg font-semibold text-white">下发远程指令</h3>
-              <p className="text-sm text-dark-400 mt-1">
-                目标设备：{device.name}
-              </p>
+              <p className="text-sm text-dark-400 mt-1">目标设备：{device.name}</p>
             </div>
             <div className="p-6 space-y-4">
               <div>
@@ -323,6 +532,38 @@ export default function DeviceDetail() {
   )
 }
 
+function filterTimeSeriesCustom(
+  data: TimeSeriesData[],
+  startStr: string,
+  endStr: string,
+): TimeSeriesData[] {
+  if (!data.length) return data
+  if (!startStr || !endStr) return data
+
+  const startDate = new Date(startStr)
+  const endDate = new Date(endStr)
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) return data
+
+  const startTs = startDate.getTime()
+  const endTs = endDate.getTime()
+
+  const withTs = data.filter((d) => d.timestamp !== undefined)
+  if (withTs.length > 0) {
+    return withTs.filter((d) => {
+      const t = d.timestamp || 0
+      return t >= startTs && t <= endTs
+    })
+  }
+
+  const totalPoints = data.length
+  const span = endTs - startTs
+  if (span <= 0) return []
+  const fullSpan = 30 * 24 * 3600 * 1000
+  const ratio = Math.min(1, span / fullSpan)
+  const take = Math.max(1, Math.floor(totalPoints * ratio))
+  return data.slice(-take)
+}
+
 function MetricCard({
   label,
   value,
@@ -347,7 +588,12 @@ function MetricCard({
 
   return (
     <div className="text-center">
-      <div className={cn('w-14 h-14 rounded-xl flex items-center justify-center mx-auto mb-3', colors[color])}>
+      <div
+        className={cn(
+          'w-14 h-14 rounded-xl flex items-center justify-center mx-auto mb-3',
+          colors[color],
+        )}
+      >
         <Icon className="w-7 h-7" />
       </div>
       <p className="text-sm text-dark-400">{label}</p>
@@ -355,29 +601,6 @@ function MetricCard({
         {value}
         {unit && <span className="text-sm font-normal text-dark-400 ml-1">{unit}</span>}
       </p>
-    </div>
-  )
-}
-
-function ChartSection({ title, unit, data, color }: { title: string; unit: string; data: any[]; color: string }) {
-  return (
-    <div>
-      <h4 className="text-sm font-semibold text-white mb-3">{title} ({unit})</h4>
-      <div className="h-48">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis dataKey="time" stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
-            <YAxis stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
-            <Tooltip
-              contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
-              labelStyle={{ color: '#e2e8f0' }}
-              itemStyle={{ color }}
-            />
-            <Line type="monotone" dataKey="value" stroke={color} strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
     </div>
   )
 }
@@ -404,7 +627,10 @@ function ResourceBar({ label, value, color }: { label: string; value: number; co
         <span className="text-sm font-medium text-white">{value}%</span>
       </div>
       <div className="h-2 bg-dark-700 rounded-full overflow-hidden">
-        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${value}%`, backgroundColor: color }} />
+        <div
+          className="h-full rounded-full transition-all duration-500"
+          style={{ width: `${value}%`, backgroundColor: color }}
+        />
       </div>
     </div>
   )

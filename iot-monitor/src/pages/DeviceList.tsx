@@ -135,7 +135,7 @@ export default function DeviceList() {
               {filteredDevices.map((device) => {
                 const isOffline = device.status === 'offline' || device.status === 'error'
                 const lastReportMinutes =
-                  (new Date().getTime() - device.lastReport.getTime()) / 60000
+                  (new Date().getTime() - new Date(device.lastReport).getTime()) / 60000
                 const shouldHighlight = lastReportMinutes > 10
 
                 return (

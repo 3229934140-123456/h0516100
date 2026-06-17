@@ -19,11 +19,11 @@ export interface Device {
   groupId: string
   status: DeviceStatus
   runState: RunState
-  lastReport: Date
+  lastReport: Date | string
   metrics: DeviceMetrics
   protocol: 'MQTT' | 'HTTP'
   firmware: string
-  createdAt: Date
+  createdAt: Date | string
 }
 
 export interface DeviceGroup {
@@ -31,7 +31,7 @@ export interface DeviceGroup {
   name: string
   description: string
   deviceCount: number
-  createdAt: Date
+  createdAt: Date | string
 }
 
 export type AlertOperator = '>' | '>=' | '<' | '<=' | '==' | '!='
@@ -39,6 +39,7 @@ export type AlertOperator = '>' | '>=' | '<' | '<=' | '==' | '!='
 export type AlertConditionType = 'metric' | 'offline'
 
 export interface AlertCondition {
+  id?: string
   type: AlertConditionType
   metric?: keyof DeviceMetrics
   operator?: AlertOperator
@@ -48,6 +49,8 @@ export interface AlertCondition {
 
 export type NotificationChannel = 'sms' | 'email' | 'in_app'
 
+export type AlertLogic = 'all' | 'any'
+
 export interface AlertRule {
   id: string
   name: string
@@ -56,11 +59,15 @@ export interface AlertRule {
   deviceIds: string[]
   groupIds: string[]
   condition: AlertCondition
+  conditions: AlertCondition[]
+  conditionLogic: AlertLogic
   channels: NotificationChannel[]
   responsibleUsers: string[]
-  createdAt: Date
-  lastTriggered?: Date
+  createdAt: Date | string
+  lastTriggered?: Date | string
 }
+
+export type AlertLevel = 'info' | 'warning' | 'critical'
 
 export interface AlertNotification {
   id: string
@@ -69,11 +76,14 @@ export interface AlertNotification {
   deviceId: string
   deviceName: string
   message: string
-  level: 'info' | 'warning' | 'critical'
+  level: AlertLevel
   channels: NotificationChannel[]
   read: boolean
   resolved: boolean
-  timestamp: Date
+  resolvedBy?: string
+  resolvedAt?: Date | string
+  resolveNote?: string
+  timestamp: Date | string
 }
 
 export type CommandStatus = 'pending' | 'sent' | 'executing' | 'success' | 'failed'
@@ -88,8 +98,8 @@ export interface DeviceCommand {
   operator: string
   result?: string
   error?: string
-  createdAt: Date
-  executedAt?: Date
+  createdAt: Date | string
+  executedAt?: Date | string
 }
 
 export interface AuditLog {
@@ -101,10 +111,11 @@ export interface AuditLog {
   operator: string
   detail: string
   ip: string
-  timestamp: Date
+  timestamp: Date | string
 }
 
 export interface TimeSeriesData {
   time: string
+  timestamp?: number
   value: number
 }
