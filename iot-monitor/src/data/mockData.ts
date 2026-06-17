@@ -435,6 +435,7 @@ export function generateTimeSeriesData(hours: number = 24, baseValue: number = 5
 
     data.push({
       time: formatTime(time),
+      timestamp: time.getTime(),
       value: Math.max(0, value),
     })
   }

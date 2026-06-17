@@ -18,6 +18,8 @@ import {
   Table2,
   ChevronLeft,
   ChevronRight,
+  Check,
+  AlertTriangle,
 } from 'lucide-react'
 import {
   LineChart,
@@ -101,6 +103,26 @@ export default function DeviceDetail() {
   const [showRawTable, setShowRawTable] = useState(false)
   const [tablePage, setTablePage] = useState(0)
   const tablePageSize = 20
+  const [expandedConds, setExpandedConds] = useState<Set<string>>(new Set())
+  const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set())
+
+  const toggleConds = (notifId: string) => {
+    setExpandedConds((prev) => {
+      const next = new Set(prev)
+      if (next.has(notifId)) next.delete(notifId)
+      else next.add(notifId)
+      return next
+    })
+  }
+
+  const toggleNote = (notifId: string) => {
+    setExpandedNotes((prev) => {
+      const next = new Set(prev)
+      if (next.has(notifId)) next.delete(notifId)
+      else next.add(notifId)
+      return next
+    })
+  }
 
   const device = id ? getDeviceById(id) : undefined
   const group = device ? getGroupById(device.groupId) : undefined
@@ -499,58 +521,123 @@ export default function DeviceDetail() {
           </Card>
 
           {deviceNotifications.length > 0 && (
-            <Card title="设备告警记录" subtitle="该设备相关的告警通知">
-              <div className="space-y-2">
-                {deviceNotifications.slice(0, 10).map((n) => (
-                  <div
-                    key={n.id}
-                    className={cn(
-                      'p-3 rounded-lg border flex items-start justify-between',
-                      n.resolved ? 'bg-dark-700/20 border-dark-700' :
-                      n.level === 'critical' ? 'bg-red-500/5 border-red-500/20' :
-                      n.level === 'warning' ? 'bg-amber-500/5 border-amber-500/20' :
-                      'bg-blue-500/5 border-blue-500/20',
-                    )}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-white">{n.ruleName}</span>
-                        <span className={cn(
-                          'px-1.5 py-0.5 rounded text-xs',
-                          n.level === 'critical' ? 'bg-red-500/10 text-red-400' :
-                          n.level === 'warning' ? 'bg-amber-500/10 text-amber-400' :
-                          'bg-blue-500/10 text-blue-400',
-                        )}>
-                          {n.level === 'critical' ? '严重' : n.level === 'warning' ? '警告' : '提示'}
-                        </span>
-                        {n.resolved && (
-                          <span className="px-1.5 py-0.5 rounded text-xs bg-emerald-500/10 text-emerald-400">已处理</span>
-                        )}
-                      </div>
-                      <p className="text-xs text-dark-400 mt-1 truncate">{n.message}</p>
-                      {n.hitConditions && n.hitConditions.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mt-1.5">
-                          {n.hitConditions.map((hc, i) => (
-                            <span
-                              key={i}
-                              className={cn(
-                                'text-xs px-1.5 py-0.5 rounded',
-                                hc.hit ? 'bg-red-500/10 text-red-400' : 'bg-dark-700 text-dark-500',
-                              )}
-                            >
-                              {hc.metric === 'temperature' ? '温度' : hc.metric === 'battery' ? '电量' : '信号'}{' '}
-                              {hc.hit ? '命中' : '未命中'}({hc.actualValue})
-                            </span>
-                          ))}
-                        </div>
+            <Card title="设备告警记录" subtitle="该设备相关的告警通知，处理信息与通知/审计一致">
+              <div className="space-y-3">
+                {deviceNotifications.slice(0, 10).map((n) => {
+                  const hitConds = n.hitConditions || []
+                  const hitList = hitConds.filter((h) => h.hit)
+                  const missCount = hitConds.filter((h) => !h.hit).length
+                  const showFull = expandedConds.has(n.id)
+                  const showNote = expandedNotes.has(n.id)
+                  return (
+                    <div
+                      key={n.id}
+                      className={cn(
+                        'p-3 rounded-lg border',
+                        n.resolved ? 'bg-dark-700/20 border-dark-700' :
+                        n.level === 'critical' ? 'bg-red-500/5 border-red-500/20' :
+                        n.level === 'warning' ? 'bg-amber-500/5 border-amber-500/20' :
+                        'bg-blue-500/5 border-blue-500/20',
                       )}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-medium text-white">{n.ruleName}</span>
+                            <span className={cn(
+                              'px-1.5 py-0.5 rounded text-xs',
+                              n.level === 'critical' ? 'bg-red-500/10 text-red-400' :
+                              n.level === 'warning' ? 'bg-amber-500/10 text-amber-400' :
+                              'bg-blue-500/10 text-blue-400',
+                            )}>
+                              {n.level === 'critical' ? '严重' : n.level === 'warning' ? '警告' : '提示'}
+                            </span>
+                            {n.resolved && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                <Check className="w-3 h-3" />已处理
+                              </span>
+                            )}
+                            {hitConds.length > 0 && (
+                              <span className={cn(
+                                'px-1.5 py-0.5 rounded text-xs font-medium',
+                                n.conditionLogic === 'all'
+                                  ? 'bg-purple-500/15 text-purple-300'
+                                  : 'bg-amber-500/15 text-amber-300',
+                              )}>
+                                {n.conditionLogic === 'all' ? 'AND' : 'OR'}
+                              </span>
+                            )}
+                          </div>
+
+                          {hitConds.length > 0 ? (
+                            <div className="flex flex-wrap gap-1.5 mt-1.5">
+                              {hitList.map((hc, i) => {
+                                const unit = hc.metric === 'temperature' ? '°C' : '%'
+                                const label = hc.metric === 'temperature' ? '温度' : hc.metric === 'battery' ? '电量' : '信号'
+                                return (
+                                  <span key={i} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-red-500/10 text-red-300 border border-red-500/30">
+                                    <AlertTriangle className="w-3 h-3" />
+                                    {label} {hc.actualValue}{unit}
+                                  </span>
+                                )
+                              })}
+                              {missCount > 0 && (
+                                <button onClick={() => toggleConds(n.id)} className="text-xs text-dark-400 hover:text-dark-300">
+                                  +{missCount} 未命中
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-dark-400 mt-1 truncate">{n.message}</p>
+                          )}
+
+                          {showFull && missCount > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {hitConds.filter((h) => !h.hit).map((hc, i) => {
+                                const unit = hc.metric === 'temperature' ? '°C' : '%'
+                                const label = hc.metric === 'temperature' ? '温度' : hc.metric === 'battery' ? '电量' : '信号'
+                                return (
+                                  <span key={i} className="px-1.5 py-0.5 rounded text-xs bg-dark-700/70 text-dark-400 border border-dark-700">
+                                    {label} {hc.actualValue}{unit} · 未命中
+                                  </span>
+                                )
+                              })}
+                            </div>
+                          )}
+
+                          {n.resolved && n.resolvedBy && (
+                            <div className="mt-2 pt-2 border-t border-dark-700/50">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-emerald-400 font-medium">
+                                  处理人：{n.resolvedBy} · {n.resolvedAt && formatDateTime(n.resolvedAt)}
+                                </span>
+                                {n.resolveNote && (
+                                  <button onClick={() => toggleNote(n.id)} className="text-xs text-dark-400 hover:text-dark-300">
+                                    {showNote ? '收起备注' : '查看备注'}
+                                  </button>
+                                )}
+                              </div>
+                              {showNote && n.resolveNote && (
+                                <div className="mt-1.5 p-2 bg-dark-800/60 rounded border border-dark-700/50">
+                                  <p className="text-xs text-dark-300 whitespace-pre-wrap">{n.resolveNote}</p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          <span className="text-xs text-dark-400 whitespace-nowrap">{formatDateTime(n.timestamp)}</span>
+                          <div className="flex gap-2">
+                            <Link to="/alerts" className="text-xs text-primary-400 hover:text-primary-300">规则</Link>
+                            <Link to="/notifications" className="text-xs text-primary-400 hover:text-primary-300">通知</Link>
+                            <Link to="/audit" className="text-xs text-primary-400 hover:text-primary-300">审计</Link>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex flex-col items-end gap-1 ml-3 flex-shrink-0">
-                      <span className="text-xs text-dark-400">{formatDateTime(n.timestamp)}</span>
-                      <Link to="/notifications" className="text-xs text-primary-400 hover:text-primary-300">查看通知</Link>
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
                 {deviceNotifications.length > 10 && (
                   <Link to="/notifications" className="block text-center text-sm text-primary-400 hover:text-primary-300 pt-2">
                     查看全部 {deviceNotifications.length} 条通知 →

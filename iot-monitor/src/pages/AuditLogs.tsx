@@ -96,7 +96,7 @@ export default function AuditLogs() {
       const notif = state.notifications.find((n) => n.id === log.targetId)
       if (notif) return `/devices/${notif.deviceId}`
     }
-    if (log.module === '告警管理') return '/alert-rules'
+    if (log.module === '告警管理') return '/alerts'
     if (log.module === '分组管理') return '/groups'
     if (log.module === '通知管理') return '/notifications'
     return null

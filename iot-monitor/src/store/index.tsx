@@ -25,7 +25,7 @@ import {
   generateTimeSeriesData,
 } from '../data/mockData'
 
-const STORAGE_KEY = 'iot-monitor-store-v3'
+const STORAGE_KEY = 'iot-monitor-store-v4'
 
 interface TimeSeriesMap {
   [deviceId: string]: {

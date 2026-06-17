@@ -399,9 +399,9 @@ export default function AlertRules() {
                           <span className="text-xs text-dark-400">暂无触发记录</span>
                         ) : (
                           triggeredNotifications.slice(0, 5).map((n) => {
-                            const isExpanded = expandedNotifs.has(n.id)
                             const hitConds = n.hitConditions || []
-                            const hitCount = hitConds.filter((h) => h.hit).length
+                            const hitList = hitConds.filter((h) => h.hit)
+                            const isExpanded = expandedNotifs.has(n.id)
                             return (
                               <div
                                 key={n.id}
@@ -420,18 +420,39 @@ export default function AlertRules() {
                                   >
                                     {n.deviceName}
                                   </Link>
-                                  <span className="text-xs text-dark-300 truncate flex-1 min-w-0">
-                                    {hitConds.length > 0
-                                      ? `${hitCount}/${hitConds.length} 项命中`
-                                      : n.message.length > 30
-                                      ? `${n.message.slice(0, 30)}...`
-                                      : n.message
-                                    }
-                                  </span>
+                                  <div className="flex items-center gap-1 flex-1 min-w-0 flex-wrap">
+                                    {hitList.length > 0 ? (
+                                      hitList.slice(0, 2).map((hc, i) => {
+                                        const unit = hc.metric === 'temperature' ? '°C' : '%'
+                                        const label = getMetricLabel(hc.metric)
+                                        return (
+                                          <span
+                                            key={i}
+                                            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs bg-red-500/10 text-red-300 border border-red-500/30 flex-shrink-0"
+                                          >
+                                            {label} {hc.actualValue}{unit}
+                                          </span>
+                                        )
+                                      })
+                                    ) : (
+                                      <span className="text-xs text-dark-300 truncate">
+                                        {n.message.length > 24 ? `${n.message.slice(0, 24)}...` : n.message}
+                                      </span>
+                                    )}
+                                    {hitList.length > 2 && (
+                                      <span className="text-xs text-dark-500">+{hitList.length - 2}</span>
+                                    )}
+                                  </div>
+                                  {n.resolved && (
+                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs bg-emerald-500/10 text-emerald-400 flex-shrink-0">
+                                      <Check className="w-3 h-3" />已处理
+                                    </span>
+                                  )}
                                   {hitConds.length > 0 && (
                                     <button
                                       onClick={() => toggleNotifExpanded(n.id)}
                                       className="text-dark-400 hover:text-dark-300 flex-shrink-0"
+                                      title="查看详情"
                                     >
                                       {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                                     </button>
@@ -440,26 +461,60 @@ export default function AlertRules() {
                                     {formatRelativeTime(n.timestamp)}
                                   </span>
                                 </div>
-                                {isExpanded && hitConds.length > 0 && (
-                                  <div className="mt-1.5 pl-4 flex flex-wrap gap-1">
-                                    {hitConds.map((hc, i) => {
-                                      const unit = hc.metric === 'temperature' ? '°C' : '%'
-                                      return (
-                                        <span
-                                          key={i}
-                                          className={cn(
-                                            'text-xs px-1.5 py-0.5 rounded',
-                                            hc.hit ? 'bg-red-500/10 text-red-400' : 'bg-dark-700 text-dark-500',
-                                          )}
-                                        >
-                                          {getMetricLabel(hc.metric)} {getOpLabel(hc.operator)} {hc.threshold}{unit}
-                                          → {hc.actualValue}{unit} {hc.hit ? '✓' : '✗'}
-                                        </span>
-                                      )
-                                    })}
-                                    <Link to="/notifications" className="text-xs text-primary-400 hover:text-primary-300 inline-flex items-center gap-0.5 ml-1">
-                                      <ExternalLink className="w-3 h-3" />通知
-                                    </Link>
+                                {isExpanded && (
+                                  <div className="mt-2 pl-4 space-y-2">
+                                    {hitConds.length > 0 && (
+                                      <div className="space-y-1">
+                                        <div className="flex items-center gap-2">
+                                          <span className={cn(
+                                            'px-1.5 py-0.5 rounded text-xs font-medium',
+                                            n.conditionLogic === 'all'
+                                              ? 'bg-purple-500/15 text-purple-300'
+                                              : 'bg-amber-500/15 text-amber-300',
+                                          )}>
+                                            {n.conditionLogic === 'all' ? '全部满足 · AND' : '任一满足 · OR'}
+                                          </span>
+                                        </div>
+                                        <div className="flex flex-wrap gap-1">
+                                          {hitConds.map((hc, i) => {
+                                            const unit = hc.metric === 'temperature' ? '°C' : '%'
+                                            return (
+                                              <span
+                                                key={i}
+                                                className={cn(
+                                                  'text-xs px-1.5 py-0.5 rounded',
+                                                  hc.hit
+                                                    ? 'bg-red-500/10 text-red-300 border border-red-500/30'
+                                                    : 'bg-dark-700 text-dark-500 border border-dark-600',
+                                                )}
+                                              >
+                                                {getMetricLabel(hc.metric)} {getOpLabel(hc.operator)} {hc.threshold}{unit}
+                                                {' → '}{hc.actualValue}{unit} {hc.hit ? '✓' : '✗'}
+                                              </span>
+                                            )
+                                          })}
+                                        </div>
+                                      </div>
+                                    )}
+                                    {n.resolved && n.resolvedBy && (
+                                      <div className="pt-1.5 border-t border-dark-600/50">
+                                        <p className="text-xs text-emerald-400">
+                                          处理人：{n.resolvedBy} · {n.resolvedAt && formatDateTime(n.resolvedAt)}
+                                        </p>
+                                        {n.resolveNote && (
+                                          <p className="text-xs text-dark-400 mt-0.5">
+                                            备注：{n.resolveNote.length > 50 ? `${n.resolveNote.slice(0, 50)}...` : n.resolveNote}
+                                          </p>
+                                        )}
+                                      </div>
+                                    )}
+                                    <div className="flex items-center gap-2 text-xs">
+                                      <Link to={`/devices/${n.deviceId}`} className="text-primary-400 hover:text-primary-300">设备详情</Link>
+                                      <span className="text-dark-600">·</span>
+                                      <Link to="/notifications" className="text-primary-400 hover:text-primary-300">通知</Link>
+                                      <span className="text-dark-600">·</span>
+                                      <Link to="/audit" className="text-primary-400 hover:text-primary-300">审计</Link>
+                                    </div>
                                   </div>
                                 )}
                               </div>

@@ -322,7 +322,7 @@ export default function Notifications() {
                             <ExternalLink className="w-3 h-3" />
                             设备：{n.deviceName}
                           </Link>
-                          <Link to="/alert-rules" className="text-sm text-primary-400 hover:text-primary-300 inline-flex items-center gap-1">
+                          <Link to="/alerts" className="text-sm text-primary-400 hover:text-primary-300 inline-flex items-center gap-1">
                             <Shield className="w-3 h-3" />
                             查看规则
                           </Link>
@@ -348,52 +348,57 @@ export default function Notifications() {
                           </div>
                         </div>
 
-                        <p className="text-sm text-dark-200 mt-2">{n.message}</p>
-
                         {hitConditions.length > 0 && (
                           <div className="mt-2">
-                            <button
-                              onClick={() => toggleConditions(n.id)}
-                              className="flex items-center gap-1.5 text-xs text-dark-400 hover:text-dark-300 transition-colors"
-                            >
-                              <span>
-                                条件命中详情：{hitCount}/{hitConditions.length} 项命中
-                                {logicLabel && <span className="ml-1 text-dark-500">({logicLabel})</span>}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={cn(
+                                'inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border',
+                                n.conditionLogic === 'all'
+                                  ? 'bg-purple-500/15 text-purple-300 border-purple-500/30'
+                                  : 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+                              )}>
+                                {n.conditionLogic === 'all' ? '全部满足 · AND' : '任一满足 · OR'}
                               </span>
-                              {isCondExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                            </button>
-                            {isCondExpanded && (
+                              {hitConditions.filter((h) => h.hit).map((hc, i) => {
+                                const unit = hc.metric === 'temperature' ? '°C' : '%'
+                                return (
+                                  <span
+                                    key={i}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-red-500/10 text-red-300 border border-red-500/30"
+                                  >
+                                    <AlertTriangle className="w-3 h-3" />
+                                    {getMetricLabel(hc.metric)} {getOpLabel(hc.operator)} {hc.threshold}{unit}
+                                    <span className="text-red-400 font-medium">（当前 {hc.actualValue}{unit}）</span>
+                                  </span>
+                                )
+                              })}
+                              {hitConditions.filter((h) => !h.hit).length > 0 && (
+                                <button
+                                  onClick={() => toggleConditions(n.id)}
+                                  className="flex items-center gap-1 text-xs text-dark-400 hover:text-dark-300 transition-colors"
+                                >
+                                  <span>查看 {hitConditions.filter((h) => !h.hit).length} 项未命中条件</span>
+                                  {isCondExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                </button>
+                              )}
+                            </div>
+                            {isCondExpanded && hitConditions.some((h) => !h.hit) && (
                               <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                                {hitConditions.map((hc, i) => {
+                                {hitConditions.filter((h) => !h.hit).map((hc, i) => {
                                   const unit = hc.metric === 'temperature' ? '°C' : '%'
                                   return (
                                     <div
                                       key={i}
-                                      className={cn(
-                                        'flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs',
-                                        hc.hit ? 'bg-red-500/10 border border-red-500/20' : 'bg-dark-700/50 border border-dark-700',
-                                      )}
+                                      className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs bg-dark-700/50 border border-dark-700"
                                     >
-                                      {hc.hit ? (
-                                        <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0" />
-                                      ) : (
-                                        <Check className="w-3 h-3 text-dark-500 flex-shrink-0" />
-                                      )}
-                                      <span className={cn(hc.hit ? 'text-red-300' : 'text-dark-400')}>
-                                        {getMetricLabel(hc.metric)}
-                                      </span>
-                                      <span className="text-dark-500">
-                                        {getOpLabel(hc.operator)} {hc.threshold}{unit}
+                                      <Check className="w-3 h-3 text-dark-500 flex-shrink-0" />
+                                      <span className="text-dark-400">
+                                        {getMetricLabel(hc.metric)} {getOpLabel(hc.operator)} {hc.threshold}{unit}
                                       </span>
                                       <span className="text-dark-500">→</span>
-                                      <span className={cn(hc.hit ? 'text-red-400 font-medium' : 'text-dark-400')}>
-                                        {hc.actualValue}{unit}
-                                      </span>
-                                      <span className={cn(
-                                        'ml-auto px-1 py-0.5 rounded text-xs',
-                                        hc.hit ? 'bg-red-500/10 text-red-400' : 'bg-dark-700 text-dark-500',
-                                      )}>
-                                        {hc.hit ? '命中' : '未命中'}
+                                      <span className="text-dark-400">当前 {hc.actualValue}{unit}</span>
+                                      <span className="ml-auto px-1 py-0.5 rounded text-xs bg-dark-700 text-dark-500">
+                                        未命中
                                       </span>
                                     </div>
                                   )
@@ -401,6 +406,10 @@ export default function Notifications() {
                               </div>
                             )}
                           </div>
+                        )}
+
+                        {!hitConditions?.length && (
+                          <p className="text-sm text-dark-200 mt-2">{n.message}</p>
                         )}
 
                         {n.resolved && n.resolvedBy && (
@@ -492,7 +501,7 @@ export default function Notifications() {
               <div className="space-y-3">
                 <div>
                   <p className="text-xs text-dark-400 mb-1">告警规则</p>
-                  <Link to="/alert-rules" className="text-sm text-white font-medium hover:text-primary-400 inline-flex items-center gap-1">
+                  <Link to="/alerts" className="text-sm text-white font-medium hover:text-primary-400 inline-flex items-center gap-1">
                     {currentNotification.ruleName}
                     <ExternalLink className="w-3 h-3" />
                   </Link>
@@ -517,33 +526,46 @@ export default function Notifications() {
                 </div>
                 {currentNotification.hitConditions && currentNotification.hitConditions.length > 0 && (
                   <div>
-                    <p className="text-xs text-dark-400 mb-1">命中条件详情</p>
-                    <div className="space-y-1">
-                      {currentNotification.hitConditions.map((hc, i) => {
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs text-dark-400">条件命中详情</p>
+                      <span className={cn(
+                        'inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border',
+                        currentNotification.conditionLogic === 'all'
+                          ? 'bg-purple-500/15 text-purple-300 border-purple-500/30'
+                          : 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+                      )}>
+                        {currentNotification.conditionLogic === 'all' ? '全部满足 · AND' : '任一满足 · OR'}
+                      </span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {currentNotification.hitConditions.filter((h) => h.hit).map((hc, i) => {
                         const unit = hc.metric === 'temperature' ? '°C' : '%'
                         return (
-                          <div key={i} className={cn(
-                            'flex items-center gap-2 px-2 py-1 rounded text-xs',
-                            hc.hit ? 'bg-red-500/10 text-red-300' : 'bg-dark-700 text-dark-400',
-                          )}>
-                            {hc.hit ? <AlertTriangle className="w-3 h-3 text-red-400" /> : <Check className="w-3 h-3 text-dark-500" />}
-                            <span>{getMetricLabel(hc.metric)} {getOpLabel(hc.operator)} {hc.threshold}{unit}</span>
-                            <span className="text-dark-500">→</span>
-                            <span className={hc.hit ? 'text-red-400 font-medium' : ''}>{hc.actualValue}{unit}</span>
-                            <span className={cn(
-                              'ml-auto px-1 py-0.5 rounded',
-                              hc.hit ? 'bg-red-500/10 text-red-400' : 'bg-dark-700 text-dark-500',
-                            )}>
-                              {hc.hit ? '命中' : '未命中'}
+                          <div key={`hit-${i}`} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs">
+                            <AlertTriangle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
+                            <span className="text-red-300 font-medium">
+                              {getMetricLabel(hc.metric)} {getOpLabel(hc.operator)} {hc.threshold}{unit}
+                            </span>
+                            <span className="text-red-400 ml-auto font-medium">
+                              当前 {hc.actualValue}{unit} · 命中
                             </span>
                           </div>
                         )
                       })}
-                      {currentNotification.conditionLogic && (
-                        <p className="text-xs text-dark-500 mt-1">
-                          逻辑：{currentNotification.conditionLogic === 'all' ? '全部满足（AND）' : '任一满足（OR）'}
-                        </p>
-                      )}
+                      {currentNotification.hitConditions.filter((h) => !h.hit).map((hc, i) => {
+                        const unit = hc.metric === 'temperature' ? '°C' : '%'
+                        return (
+                          <div key={`miss-${i}`} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-dark-700/50 border border-dark-700 text-xs">
+                            <Check className="w-3.5 h-3.5 text-dark-500 flex-shrink-0" />
+                            <span className="text-dark-400">
+                              {getMetricLabel(hc.metric)} {getOpLabel(hc.operator)} {hc.threshold}{unit}
+                            </span>
+                            <span className="text-dark-500 ml-auto">
+                              当前 {hc.actualValue}{unit} · 未命中
+                            </span>
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
                 )}
