@@ -16,13 +16,14 @@ import {
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import StatusBadge from '../components/ui/StatusBadge'
-import { mockAuditLogs, mockCommands, mockDevices } from '../data/mockData'
+import { useStore } from '../store'
 import { formatDateTime, cn } from '../utils'
 import type { AuditLog, DeviceCommand } from '../types'
 
 type TabType = 'audit' | 'commands'
 
 export default function AuditLogs() {
+  const { state } = useStore()
   const [activeTab, setActiveTab] = useState<TabType>('audit')
   const [searchTerm, setSearchTerm] = useState('')
   const [moduleFilter, setModuleFilter] = useState('all')
@@ -30,7 +31,7 @@ export default function AuditLogs() {
 
   const modules = ['系统', '设备管理', '告警管理', '分组管理', '用户管理']
 
-  const filteredLogs = mockAuditLogs.filter((log) => {
+  const filteredLogs = state.auditLogs.filter((log) => {
     const matchesSearch =
       log.operator.toLowerCase().includes(searchTerm.toLowerCase()) ||
       log.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -40,7 +41,7 @@ export default function AuditLogs() {
     return matchesSearch && matchesModule
   })
 
-  const filteredCommands = mockCommands.filter((cmd) => {
+  const filteredCommands = state.commands.filter((cmd) => {
     const matchesSearch =
       cmd.deviceName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       cmd.command.toLowerCase().includes(searchTerm.toLowerCase()) ||

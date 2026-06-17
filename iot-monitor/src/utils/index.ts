@@ -7,17 +7,23 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-export function formatDateTime(date: Date) {
-  return format(date, 'yyyy-MM-dd HH:mm:ss', { locale: zhCN })
+function toDate(date: Date | string): Date {
+  if (date instanceof Date) return date
+  return new Date(date)
 }
 
-export function formatDate(date: Date) {
-  return format(date, 'yyyy-MM-dd', { locale: zhCN })
+export function formatDateTime(date: Date | string) {
+  return format(toDate(date), 'yyyy-MM-dd HH:mm:ss', { locale: zhCN })
 }
 
-export function formatRelativeTime(date: Date) {
+export function formatDate(date: Date | string) {
+  return format(toDate(date), 'yyyy-MM-dd', { locale: zhCN })
+}
+
+export function formatRelativeTime(date: Date | string) {
+  const d = toDate(date)
   const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
+  const diffMs = now.getTime() - d.getTime()
   const diffMin = Math.floor(diffMs / 60000)
   const diffHour = Math.floor(diffMin / 60)
   const diffDay = Math.floor(diffHour / 24)
@@ -26,7 +32,7 @@ export function formatRelativeTime(date: Date) {
   if (diffMin < 60) return `${diffMin} 分钟前`
   if (diffHour < 24) return `${diffHour} 小时前`
   if (diffDay < 30) return `${diffDay} 天前`
-  return formatDate(date)
+  return formatDate(d)
 }
 
 export function getStatusColor(status: string) {

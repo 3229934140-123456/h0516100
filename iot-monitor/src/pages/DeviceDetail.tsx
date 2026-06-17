@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -24,57 +24,37 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Legend,
 } from 'recharts'
 import Card from '../components/ui/Card'
 import StatusBadge from '../components/ui/StatusBadge'
 import Button from '../components/ui/Button'
-import {
-  getDeviceById,
-  getGroupById,
-  generateTimeSeriesData,
-  mockCommands,
-} from '../data/mockData'
+import { useStore } from '../store'
 import { formatDateTime, cn } from '../utils'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d'
 
+const commandOptions = [
+  { value: '重启设备', label: '重启设备' },
+  { value: '固件升级', label: '固件升级' },
+  { value: '远程诊断', label: '远程诊断' },
+  { value: '参数配置', label: '参数配置' },
+  { value: '恢复出厂设置', label: '恢复出厂设置' },
+]
+
 export default function DeviceDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const store = useStore()
+
   const [timeRange, setTimeRange] = useState<TimeRange>('24h')
   const [showCommandModal, setShowCommandModal] = useState(false)
   const [selectedCommand, setSelectedCommand] = useState('')
   const [commandParams, setCommandParams] = useState('')
 
-  const device = useMemo(() => (id ? getDeviceById(id) : undefined), [id])
-  const group = useMemo(() => (device ? getGroupById(device.groupId) : undefined), [device])
-
-  const timeRangeHours: Record<TimeRange, number> = {
-    '1h': 1,
-    '6h': 6,
-    '24h': 24,
-    '7d': 168,
-    '30d': 720,
-  }
-
-  const temperatureData = useMemo(
-    () => generateTimeSeriesData(timeRangeHours[timeRange], 65, 20),
-    [timeRange],
-  )
-  const batteryData = useMemo(
-    () => generateTimeSeriesData(timeRangeHours[timeRange], 85, 10),
-    [timeRange],
-  )
-  const signalData = useMemo(
-    () => generateTimeSeriesData(timeRangeHours[timeRange], 90, 15),
-    [timeRange],
-  )
-
-  const deviceCommands = useMemo(
-    () => mockCommands.filter((c) => c.deviceId === id),
-    [id],
-  )
+  const device = id ? store.getDeviceById(id) : undefined
+  const group = device ? store.getGroupById(device.groupId) : undefined
+  const deviceCommands = id ? store.getCommandsByDevice(id) : []
+  const tsData = id ? store.getDeviceTimeSeries(id) : null
 
   if (!device) {
     return (
@@ -85,20 +65,37 @@ export default function DeviceDetail() {
     )
   }
 
+  const handleSendCommand = () => {
+    if (!selectedCommand || !id) return
+
+    let params: Record<string, any> | undefined
+    if (commandParams.trim()) {
+      try {
+        params = JSON.parse(commandParams)
+      } catch {
+        params = { raw: commandParams }
+      }
+    }
+
+    store.sendCommand({
+      deviceId: id,
+      deviceName: device.name,
+      command: selectedCommand,
+      params,
+      operator: '管理员',
+    })
+
+    setSelectedCommand('')
+    setCommandParams('')
+    setShowCommandModal(false)
+  }
+
   const timeRanges: { key: TimeRange; label: string }[] = [
     { key: '1h', label: '1小时' },
     { key: '6h', label: '6小时' },
     { key: '24h', label: '24小时' },
     { key: '7d', label: '7天' },
     { key: '30d', label: '30天' },
-  ]
-
-  const commands = [
-    { value: 'reboot', label: '重启设备' },
-    { value: 'firmware_upgrade', label: '固件升级' },
-    { value: 'diagnose', label: '远程诊断' },
-    { value: 'config', label: '参数配置' },
-    { value: 'reset', label: '恢复出厂设置' },
   ]
 
   return (
@@ -199,9 +196,13 @@ export default function DeviceDetail() {
             }
           >
             <div className="space-y-8">
-              <ChartSection title="温度趋势" unit="°C" data={temperatureData} color="#f97316" />
-              <ChartSection title="电量趋势" unit="%" data={batteryData} color="#22c55e" />
-              <ChartSection title="信号强度" unit="%" data={signalData} color="#3b82f6" />
+              {tsData && (
+                <>
+                  <ChartSection title="温度趋势" unit="°C" data={tsData.temperature} color="#f97316" />
+                  <ChartSection title="电量趋势" unit="%" data={tsData.battery} color="#22c55e" />
+                  <ChartSection title="信号强度" unit="%" data={tsData.signal} color="#3b82f6" />
+                </>
+              )}
             </div>
           </Card>
         </div>
@@ -219,10 +220,7 @@ export default function DeviceDetail() {
                 label="所属分组"
                 value={
                   group ? (
-                    <Link
-                      to={`/groups`}
-                      className="text-primary-400 hover:text-primary-300"
-                    >
+                    <Link to="/groups" className="text-primary-400 hover:text-primary-300">
                       {group.name}
                     </Link>
                   ) : (
@@ -235,10 +233,7 @@ export default function DeviceDetail() {
             </div>
           </Card>
 
-          <Card
-            title="系统资源"
-            subtitle="设备CPU和内存使用情况"
-          >
+          <Card title="系统资源" subtitle="设备CPU和内存使用情况">
             <div className="space-y-4">
               <ResourceBar label="CPU 使用率" value={device.metrics.cpu || 0} color="#3b82f6" />
               <ResourceBar label="内存使用率" value={device.metrics.memory || 0} color="#8b5cf6" />
@@ -281,16 +276,14 @@ export default function DeviceDetail() {
             </div>
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-dark-300 mb-2">
-                  选择指令
-                </label>
+                <label className="block text-sm font-medium text-dark-300 mb-2">选择指令</label>
                 <select
                   value={selectedCommand}
                   onChange={(e) => setSelectedCommand(e.target.value)}
                   className="w-full h-10 bg-dark-700 border border-dark-600 rounded-lg px-4 text-sm text-white focus:outline-none focus:border-primary-500 transition-colors"
                 >
                   <option value="">请选择指令...</option>
-                  {commands.map((c) => (
+                  {commandOptions.map((c) => (
                     <option key={c.value} value={c.value}>
                       {c.label}
                     </option>
@@ -319,13 +312,7 @@ export default function DeviceDetail() {
               <Button variant="secondary" onClick={() => setShowCommandModal(false)}>
                 取消
               </Button>
-              <Button
-                disabled={!selectedCommand}
-                onClick={() => {
-                  alert(`指令已下发：${selectedCommand}`)
-                  setShowCommandModal(false)
-                }}
-              >
+              <Button disabled={!selectedCommand} onClick={handleSendCommand}>
                 确认下发
               </Button>
             </div>
@@ -360,21 +347,11 @@ function MetricCard({
 
   return (
     <div className="text-center">
-      <div
-        className={cn(
-          'w-14 h-14 rounded-xl flex items-center justify-center mx-auto mb-3',
-          colors[color],
-        )}
-      >
+      <div className={cn('w-14 h-14 rounded-xl flex items-center justify-center mx-auto mb-3', colors[color])}>
         <Icon className="w-7 h-7" />
       </div>
       <p className="text-sm text-dark-400">{label}</p>
-      <p
-        className={cn(
-          'text-2xl font-bold mt-1',
-          warning ? 'text-red-400' : 'text-white',
-        )}
-      >
+      <p className={cn('text-2xl font-bold mt-1', warning ? 'text-red-400' : 'text-white')}>
         {value}
         {unit && <span className="text-sm font-normal text-dark-400 ml-1">{unit}</span>}
       </p>
@@ -382,17 +359,7 @@ function MetricCard({
   )
 }
 
-function ChartSection({
-  title,
-  unit,
-  data,
-  color,
-}: {
-  title: string
-  unit: string
-  data: any[]
-  color: string
-}) {
+function ChartSection({ title, unit, data, color }: { title: string; unit: string; data: any[]; color: string }) {
   return (
     <div>
       <h4 className="text-sm font-semibold text-white mb-3">{title} ({unit})</h4>
@@ -400,31 +367,14 @@ function ChartSection({
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis
-              dataKey="time"
-              stroke="#64748b"
-              fontSize={11}
-              tickLine={false}
-              axisLine={false}
-            />
+            <XAxis dataKey="time" stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
             <YAxis stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
             <Tooltip
-              contentStyle={{
-                backgroundColor: '#1e293b',
-                border: '1px solid #334155',
-                borderRadius: '8px',
-              }}
+              contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
               labelStyle={{ color: '#e2e8f0' }}
               itemStyle={{ color }}
             />
-            <Line
-              type="monotone"
-              dataKey="value"
-              stroke={color}
-              strokeWidth={2}
-              dot={false}
-              activeDot={{ r: 4 }}
-            />
+            <Line type="monotone" dataKey="value" stroke={color} strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -432,15 +382,7 @@ function ChartSection({
   )
 }
 
-function InfoItem({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: any
-  label: string
-  value: React.ReactNode
-}) {
+function InfoItem({ icon: Icon, label, value }: { icon: any; label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-start gap-3">
       <div className="w-8 h-8 rounded-lg bg-dark-700 flex items-center justify-center flex-shrink-0">
@@ -454,15 +396,7 @@ function InfoItem({
   )
 }
 
-function ResourceBar({
-  label,
-  value,
-  color,
-}: {
-  label: string
-  value: number
-  color: string
-}) {
+function ResourceBar({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div>
       <div className="flex justify-between mb-1.5">
@@ -470,10 +404,7 @@ function ResourceBar({
         <span className="text-sm font-medium text-white">{value}%</span>
       </div>
       <div className="h-2 bg-dark-700 rounded-full overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all duration-500"
-          style={{ width: `${value}%`, backgroundColor: color }}
-        />
+        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${value}%`, backgroundColor: color }} />
       </div>
     </div>
   )

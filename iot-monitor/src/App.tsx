@@ -7,6 +7,7 @@ import AlertRules from './pages/AlertRules'
 import Notifications from './pages/Notifications'
 import DeviceGroups from './pages/DeviceGroups'
 import AuditLogs from './pages/AuditLogs'
+import DataSimulator from './pages/DataSimulator'
 
 function App() {
   return (
@@ -20,6 +21,7 @@ function App() {
         <Route path="notifications" element={<Notifications />} />
         <Route path="groups" element={<DeviceGroups />} />
         <Route path="audit" element={<AuditLogs />} />
+        <Route path="simulator" element={<DataSimulator />} />
       </Route>
     </Routes>
   )

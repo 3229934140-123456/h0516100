@@ -8,6 +8,7 @@ import {
   FileText,
   ChevronLeft,
   ChevronRight,
+  Radio,
   Cpu as CpuIcon,
 } from 'lucide-react'
 import { cn } from '../utils'
@@ -24,6 +25,7 @@ const menuItems = [
   { path: '/alerts', label: '告警规则', icon: AlertTriangle },
   { path: '/notifications', label: '通知消息', icon: Bell },
   { path: '/groups', label: '设备分组', icon: Layers },
+  { path: '/simulator', label: '数据模拟', icon: Radio },
   { path: '/audit', label: '审计日志', icon: FileText },
 ]
 

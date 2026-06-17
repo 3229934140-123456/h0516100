@@ -14,18 +14,19 @@ import {
 import Card from '../components/ui/Card'
 import StatusBadge from '../components/ui/StatusBadge'
 import Button from '../components/ui/Button'
-import { mockDevices, mockGroups } from '../data/mockData'
+import { useStore } from '../store'
 import { formatRelativeTime, cn } from '../utils'
 import type { DeviceStatus } from '../types'
 
 export default function DeviceList() {
   const navigate = useNavigate()
+  const { state } = useStore()
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<DeviceStatus | 'all'>('all')
   const [groupFilter, setGroupFilter] = useState<string>('all')
 
   const filteredDevices = useMemo(() => {
-    return mockDevices.filter((device) => {
+    return state.devices.filter((device) => {
       const matchesSearch =
         device.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         device.serial.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -34,16 +35,16 @@ export default function DeviceList() {
       const matchesGroup = groupFilter === 'all' || device.groupId === groupFilter
       return matchesSearch && matchesStatus && matchesGroup
     })
-  }, [searchTerm, statusFilter, groupFilter])
+  }, [searchTerm, statusFilter, groupFilter, state.devices])
 
   const stats = useMemo(() => {
     return {
-      total: mockDevices.length,
-      online: mockDevices.filter((d) => d.status === 'online').length,
-      offline: mockDevices.filter((d) => d.status === 'offline').length,
-      warning: mockDevices.filter((d) => d.status === 'warning' || d.status === 'error').length,
+      total: state.devices.length,
+      online: state.devices.filter((d) => d.status === 'online').length,
+      offline: state.devices.filter((d) => d.status === 'offline').length,
+      warning: state.devices.filter((d) => d.status === 'warning' || d.status === 'error').length,
     }
-  }, [])
+  }, [state.devices])
 
   return (
     <div className="space-y-6">
@@ -89,7 +90,7 @@ export default function DeviceList() {
                 className="h-10 bg-dark-700 border border-dark-600 rounded-lg pl-9 pr-8 text-sm text-white focus:outline-none focus:border-primary-500 transition-colors appearance-none cursor-pointer"
               >
                 <option value="all">全部分组</option>
-                {mockGroups.map((g) => (
+                {state.groups.map((g) => (
                   <option key={g.id} value={g.id}>
                     {g.name}
                   </option>

@@ -1,12 +1,13 @@
 import { Bell, Search, User } from 'lucide-react'
 import { useState } from 'react'
-import { mockNotifications } from '../data/mockData'
 import { cn, formatRelativeTime, getStatusColor } from '../utils'
 import { Link } from 'react-router-dom'
+import { useStore } from '../store'
 
 export default function Navbar() {
+  const { state } = useStore()
   const [showNotifications, setShowNotifications] = useState(false)
-  const unreadCount = mockNotifications.filter((n) => !n.read).length
+  const unreadCount = state.notifications.filter((n) => !n.read).length
 
   return (
     <header className="h-16 bg-dark-800 border-b border-dark-700 flex items-center justify-between px-6">
@@ -48,7 +49,7 @@ export default function Navbar() {
                 </Link>
               </div>
               <div className="max-h-80 overflow-y-auto">
-                {mockNotifications.slice(0, 5).map((n) => (
+                {state.notifications.slice(0, 5).map((n) => (
                   <div
                     key={n.id}
                     className={cn(

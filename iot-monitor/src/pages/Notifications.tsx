@@ -15,12 +15,13 @@ import {
 } from 'lucide-react'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
-import { mockNotifications } from '../data/mockData'
+import { useStore } from '../store'
 import { formatDateTime, cn } from '../utils'
 import type { AlertNotification } from '../types'
 
 export default function Notifications() {
-  const [notifications, setNotifications] = useState(mockNotifications)
+  const { state, markNotificationRead, markAllNotificationsRead, resolveNotification } = useStore()
+  const notifications = state.notifications
   const [filter, setFilter] = useState<'all' | 'unread' | 'resolved'>('all')
   const [searchTerm, setSearchTerm] = useState('')
 
@@ -38,24 +39,8 @@ export default function Notifications() {
     return matchesSearch && matchesFilter
   })
 
-  const unreadCount = notifications.filter((n) => !n.read).length
+  const unreadCount = state.notifications.filter((n) => !n.read).length
   const unresolvedCount = notifications.filter((n) => !n.resolved).length
-
-  const markAsRead = (id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
-    )
-  }
-
-  const markAllAsRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
-  }
-
-  const resolveNotification = (id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, resolved: true, read: true } : n)),
-    )
-  }
 
   const getLevelIcon = (level: AlertNotification['level']) => {
     switch (level) {
@@ -89,7 +74,7 @@ export default function Notifications() {
           </p>
         </div>
         <div className="flex gap-3">
-          <Button variant="secondary" onClick={markAllAsRead} disabled={unreadCount === 0}>
+          <Button variant="secondary" onClick={markAllNotificationsRead} disabled={unreadCount === 0}>
             <CheckCheck className="w-4 h-4" />
             全部已读
           </Button>
@@ -242,7 +227,7 @@ export default function Notifications() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => markAsRead(n.id)}
+                            onClick={() => markNotificationRead(n.id)}
                           >
                             <Check className="w-4 h-4" />
                             标记已读

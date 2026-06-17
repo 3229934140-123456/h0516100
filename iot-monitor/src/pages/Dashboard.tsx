@@ -29,23 +29,20 @@ import {
 import Card from '../components/ui/Card'
 import StatusBadge from '../components/ui/StatusBadge'
 import Button from '../components/ui/Button'
-import {
-  mockDevices,
-  mockGroups,
-  mockNotifications,
-  generateTimeSeriesData,
-} from '../data/mockData'
+import { useStore } from '../store'
 import { formatRelativeTime, cn } from '../utils'
 
 export default function Dashboard() {
+  const { state } = useStore()
+
   const stats = useMemo(() => {
     return {
-      total: mockDevices.length,
-      online: mockDevices.filter((d) => d.status === 'online').length,
-      offline: mockDevices.filter((d) => d.status === 'offline').length,
-      warning: mockDevices.filter((d) => d.status === 'warning' || d.status === 'error').length,
+      total: state.devices.length,
+      online: state.devices.filter((d) => d.status === 'online').length,
+      offline: state.devices.filter((d) => d.status === 'offline').length,
+      warning: state.devices.filter((d) => d.status === 'warning' || d.status === 'error').length,
     }
-  }, [])
+  }, [state.devices])
 
   const onlineRate = useMemo(() => {
     return stats.total > 0 ? Math.round((stats.online / stats.total) * 100) : 0
@@ -57,10 +54,23 @@ export default function Dashboard() {
     { name: '异常', value: stats.warning, color: '#ef4444' },
   ]
 
-  const temperatureTrend = useMemo(() => generateTimeSeriesData(24, 60, 15), [])
-  const unreadNotifications = mockNotifications.filter((n) => !n.read).slice(0, 5)
+  const temperatureTrend = useMemo(() => {
+    const deviceIds = Object.keys(state.timeSeries)
+    if (deviceIds.length === 0) return []
+    const allSeries = deviceIds.map((id) => state.timeSeries[id].temperature)
+    const maxLength = Math.max(...allSeries.map((s) => s.length))
+    if (maxLength === 0) return []
+    return Array.from({ length: maxLength }, (_, i) => {
+      const values = allSeries.map((s) => s[i]?.value).filter((v): v is number => v !== undefined)
+      const avg = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0
+      const time = allSeries.find((s) => s[i]?.time)?.[i]?.time ?? ''
+      return { time, value: Math.round(avg * 10) / 10 }
+    })
+  }, [state.timeSeries])
 
-  const recentDevices = mockDevices.slice(0, 5)
+  const unreadNotifications = state.notifications.filter((n) => !n.read).slice(0, 5)
+
+  const recentDevices = state.devices.slice(0, 5)
 
   return (
     <div className="space-y-6">
@@ -318,8 +328,8 @@ export default function Dashboard() {
 
       <Card title="设备分组概览" subtitle="快速查看各分组状态">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {mockGroups.map((group) => {
-            const devices = mockDevices.filter((d) => d.groupId === group.id)
+          {state.groups.map((group) => {
+            const devices = state.devices.filter((d) => d.groupId === group.id)
             const online = devices.filter((d) => d.status === 'online').length
             const warning = devices.filter(
               (d) => d.status === 'warning' || d.status === 'error',
